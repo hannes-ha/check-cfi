@@ -29,6 +29,8 @@ fn read_file(path: &str) -> Vec<u8> {
 }
 
 fn disassemble(code: &[u8]) {
+
+    // set up capstone
     let cs = Capstone::new()
         .x86()
         .mode(arch::x86::ArchMode::Mode64)
@@ -36,7 +38,12 @@ fn disassemble(code: &[u8]) {
         .detail(true) // Enable detailed disassembly
         .build()
         .expect("Failed to create Capstone disassembler");
-    let insns = cs.disasm_all(code, 0x1000).expect("Failed to disassemble"); // Assuming 0x1000 as the base address
+
+
+    // get instructions
+    let insns = cs.disasm_all(code, 0x1000).expect("Failed to disassemble"); 
+
+    // iterate instructions
     for insn in insns.iter() {
         println!(
             "0x{:x}: {:6} {}",
@@ -57,8 +64,6 @@ fn main() {
         )
         .get_matches();
     let file_path = matches.get_one::<String>("FILE").expect("FILE is required");
-
     let file_content = read_file(&file_path);
-
     disassemble(&file_content);
 }
