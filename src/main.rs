@@ -7,6 +7,8 @@ use iced_x86::{
 };
 use object::{Object, ObjectSection};
 
+const INSTRUCTION_BUFFER_SIZE: usize = 15;
+
 fn read_file(path: &str) -> Vec<u8> {
     // read binary
     let binary = fs::read(path).expect("Could not read file");
@@ -37,25 +39,27 @@ fn read_file(path: &str) -> Vec<u8> {
             caviats:
         - the branch to the call instruction does not need to be direct, often it will point to instructions loading arguments.
              but no modifications to the call target should be made before the actual call
-        - the comparison can be made on another register, holding the same value
+        - the comparison can be made on another register, holding the same value (ignore?)
 */
-fn is_cfi_checked(instruction: &Instruction, predecessors: &VecDeque<Instruction>) -> bool {
+
+#[allow(dead_code)]
+fn is_cfi_checked(icall: &Instruction, predecessors: &VecDeque<Instruction>) -> bool {
     // if this is not a call instruction, throw error
-    if instruction.mnemonic() != Mnemonic::Call {
-        eprintln!("{:?}", instruction);
+    if icall.mnemonic() != Mnemonic::Call {
+        eprintln!("{:?}", icall);
         eprintln!("{:?}", predecessors);
         panic!("is_cfi_checked called on non-call instruction");
     }
 
     // call [rbp - 0xabc] might be needed as well
     // for now, we assume target is a register
-    if instruction.op0_kind() != OpKind::Register {
-        eprintln!("{:?}", instruction);
+    if icall.op0_kind() != OpKind::Register {
+        eprintln!("{:?}", icall);
         eprintln!("{:?}", predecessors);
         panic!("is_cfi_checked called on non-register call instruction");
     }
 
-    let target_reg = instruction.op0_register();
+    let target_reg = icall.op0_register();
 
     let mut friend_registers: Vec<Register> = Vec::new();
 
@@ -66,6 +70,7 @@ fn is_cfi_checked(instruction: &Instruction, predecessors: &VecDeque<Instruction
     for pred in predecessors {
         // if we run into another call instruction, something is wrong
         // handle this better later
+        // just start over?
         if pred.is_call_near() || pred.is_call_far() {
             panic!("found another call within predecessors");
         }
@@ -78,7 +83,7 @@ fn is_cfi_checked(instruction: &Instruction, predecessors: &VecDeque<Instruction
                     if pred.op1_kind() == OpKind::Register && pred.op1_register() == target_reg {
                         friend_registers.push(pred.op0_register());
 
-                    // This is wierd, ugly and probably incorrect 
+                    // This is wierd, ugly and probably incorrect
                     } else if friend_registers.contains(&pred.op1_register()) {
                         friend_registers.push(pred.op0_register());
                     }
@@ -140,6 +145,69 @@ fn is_cfi_checked(instruction: &Instruction, predecessors: &VecDeque<Instruction
     return false;
 }
 
+fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -> bool {
+    // only keep instructions since last cmp
+    let mut relevant_inst: VecDeque<_> = predecessors
+        .iter()
+        .rev()
+        .take_while(|instr| instr.mnemonic() != Mnemonic::Cmp)
+        .collect();
+
+    // might need to allow distance here
+
+    // reverse relevant instructions again
+    // but keep as iterator
+
+    // the instruction after the cmp should be a jump
+    let jmp_target: u64;
+    match relevant_inst.pop_back() {
+        Some(instr) => {
+            if instr.mnemonic() != Mnemonic::Jbe {
+                return false;
+            }
+            jmp_target = instr.memory_displacement64();
+        }
+        None => return false,
+    }
+
+    // next instruction should be ud1
+    match relevant_inst.pop_back() {
+        Some(instr) => {
+            if instr.mnemonic() != Mnemonic::Ud1 {
+                return false;
+            }
+        }
+        None => return false,
+    }
+
+    // now, the jump target should be passed
+    // and the target register should not be touched
+
+    let mut jump_target_passed = false;
+    while let Some(instr) = relevant_inst.pop_back() {
+        if instr.ip() == jmp_target {
+            jump_target_passed = true;
+        }
+
+        // this might be unnessecary/overkill
+        match icall.op0_kind() {
+            OpKind::Register => {
+                if instr.op0_register() == icall.op0_register() {
+                    return false;
+                }
+            }
+            OpKind::Memory => {
+                if instr.memory_displacement64() == icall.memory_displacement64() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    jump_target_passed
+}
+
 fn disassembled_iced(code: &[u8]) {
     let base_offset = 0x1020;
     // set up iced
@@ -164,7 +232,7 @@ fn disassembled_iced(code: &[u8]) {
             // we somehow need to remove the "indirect" calls to __cxa_finalize
             // are these simply DSOs?
             if !instruction.is_ip_rel_memory_operand() {
-                if is_cfi_checked(&instruction, &predecessors) {
+                if is_cfi_checked_2(&instruction, &predecessors) {
                     output = format!(
                         "{} {}",
                         output.green().bold(),
@@ -183,8 +251,8 @@ fn disassembled_iced(code: &[u8]) {
         }
         predecessors.push_back(instruction);
 
-        // if length is above 15, pop the oldest
-        if predecessors.len() > 15 {
+        // if length is above buffer size, pop the oldest
+        if predecessors.len() > INSTRUCTION_BUFFER_SIZE {
             predecessors.pop_front();
         }
         println!("0x{:x}: {}", instruction.ip(), output);
