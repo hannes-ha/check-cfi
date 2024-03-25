@@ -8,6 +8,7 @@ use iced_x86::{
 use object::{Object, ObjectSection};
 
 const INSTRUCTION_BUFFER_SIZE: usize = 15;
+const TEXT_SECTION_START: u64 = 0x4050;
 
 fn read_file(path: &str) -> Vec<u8> {
     // read binary
@@ -203,10 +204,9 @@ fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -
 }
 
 fn disassembled_iced(code: &[u8]) {
-    let base_offset = 0x1020;
     // set up iced
     let mut decoder = Decoder::new(64, code, DecoderOptions::NONE);
-    decoder.set_ip(base_offset);
+    decoder.set_ip(TEXT_SECTION_START);
 
     let mut formatter = IntelFormatter::new();
     formatter.options_mut().set_hex_prefix("0x");
