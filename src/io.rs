@@ -1,5 +1,6 @@
 use std::fs;
 
+use iced_x86::{Formatter, Instruction, IntelFormatter};
 use object::{Object, ObjectSection};
 
 pub fn read_file(path: &str) -> (Vec<u8>, u64) {
@@ -25,4 +26,34 @@ pub fn read_file(path: &str) -> (Vec<u8>, u64) {
 
     // return as vector
     (Vec::from(data), adress)
+}
+
+pub fn print_instruction(instr: &Instruction, formatter: &mut IntelFormatter) {
+    let mut output = String::new();
+    formatter.format(instr, &mut output);
+    println!("0x{:x} {}", instr.ip(), output);
+}
+
+pub fn print_results(checked: Vec<Instruction>, unchecked: Vec<Instruction>, verbose: bool) {
+    let mut formatter = IntelFormatter::new();
+    formatter.options_mut().set_hex_prefix("0x");
+    formatter.options_mut().set_hex_suffix("");
+    formatter.options_mut().set_branch_leading_zeros(false);
+
+    println!(
+        "Found {} checked and {} unchecked indirect calls",
+        checked.len(),
+        unchecked.len()
+    );
+
+    if verbose {
+        println!("---Checked:---");
+        for instr in checked {
+            print_instruction(&instr, &mut formatter);
+        }
+        println!("---Unchecked:---");
+        for instr in unchecked {
+            print_instruction(&instr, &mut formatter);
+        }
+    }
 }
