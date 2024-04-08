@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 
-use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind};
+use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
 use indicatif::ProgressStyle;
 
-const INSTRUCTION_BUFFER_SIZE: usize = 30;
+const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
 
 /*
@@ -128,6 +128,11 @@ impl Analyzer {
             .iter()
             .rev()
             .take_while(|instruction| {
+                // stop if we run in to another call and we are using RAX for our call
+                if instruction.mnemonic() == Mnemonic::Call && icall.op0_kind() == OpKind::Register && icall.op0_register() == Register::RAX {
+                    return false;
+                }
+                // stop where the call target is loaded
                 if instruction.mnemonic() == Mnemonic::Mov {
                     match instruction.op0_kind() {
                         OpKind::Register => {
@@ -209,7 +214,7 @@ impl Analyzer {
                         }
                     }
                 }
-                if is_ud1(instruction) {
+                if instruction.mnemonic() == Mnemonic::Ud1 {
                     // println!("UD1 found");
                     fail_branch_found = true;
                 }
@@ -240,6 +245,4 @@ fn is_jump(instruction: &Instruction) -> bool {
     .contains(&mnemonic);
 }
 
-fn is_ud1(instruction: &Instruction) -> bool {
-    return instruction.mnemonic() == Mnemonic::Ud1;
-}
+
