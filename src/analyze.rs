@@ -3,8 +3,8 @@ use std::collections::{HashMap, VecDeque};
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind};
 use indicatif::ProgressStyle;
 
-const INSTRUCTION_BUFFER_SIZE: usize = 15;
-const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 10;
+const INSTRUCTION_BUFFER_SIZE: usize = 30;
+const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
 
 /*
             idea:
@@ -120,7 +120,7 @@ impl Analyzer {
         // println!("Predecessors instruction count: {}", predecessors.len());
         // println!("Predecessors:");
         // for instr in predecessors {
-            // println!("{}", instr);
+        // println!("{}", instr);
         // }
 
         // save the predecessors up until the value of the call target is loaded
@@ -145,8 +145,8 @@ impl Analyzer {
             .collect::<Vec<_>>();
 
         // println!(
-            // "Relevant instruction count: {}",
-            // relevant_instructions.len()
+        // "Relevant instruction count: {}",
+        // relevant_instructions.len()
         // );
 
         let mut test_passed = false;
@@ -159,6 +159,7 @@ impl Analyzer {
         // we now iterate over the relevant instructions to find the two branches
         relevant_instructions.iter().rev().for_each(|instruction| {
             if instruction.mnemonic() == Mnemonic::Cmp || instruction.mnemonic() == Mnemonic::Test {
+                // handle multiple cmps?
                 test_passed = true;
             }
 
@@ -173,15 +174,19 @@ impl Analyzer {
                     } else {
                         // println!("checking for ud1");
                         // look up the branch target in the address map
-                        let branch_target_index = self
-                            .address_map
-                            .get(&instruction.near_branch_target())
-                            .unwrap();
+                        let Some(branch_target_index) =
+                            self.address_map.get(&instruction.near_branch_target())
+                        else {
+                            return;
+                        };
 
                         // println!("Branch target index: {}", branch_target_index);
 
                         // get the branch target instruction
-                        let branch_target = self.instructions.get(*branch_target_index).unwrap();
+                        let Some(branch_target) = self.instructions.get(*branch_target_index)
+                        else {
+                            return;
+                        };
 
                         //println!("Branch target instruction: {}", branch_target);
 
@@ -221,8 +226,6 @@ impl Analyzer {
         return Err(());
     }
 }
-
-
 
 fn is_jump(instruction: &Instruction) -> bool {
     let mnemonic = instruction.mnemonic();
