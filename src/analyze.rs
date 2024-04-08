@@ -138,13 +138,13 @@ impl Analyzer {
             .collect::<Vec<_>>();
 
         if icall.ip() == DEBUGGING_IP {
-            println!(
+            eprintln!(
                 "Relevant instruction count: {}",
                 relevant_instructions.len()
             );
 
             for instr in &relevant_instructions {
-                println!("{}", instr);
+                eprintln!("{}", instr);
             }
         }
 
@@ -175,16 +175,16 @@ impl Analyzer {
                 // if actual jump instruction is found, follow it
                 if instruction.is_jcc_short_or_near() {
                     if icall.ip() == DEBUGGING_IP {
-                        println!("JMP found");
-                        println!("Branch target: {}", instruction.near_branch_target());
-                        println!("icall target: {}", icall.ip());
+                        eprintln!("JMP found");
+                        eprintln!("Branch target: {}", instruction.near_branch_target());
+                        eprintln!("icall target: {}", icall.ip());
                     }
                     // look up the branch target in the address map
                     let Some(branch_target_index) =
                         self.address_map.get(&instruction.near_branch_target())
                     else {
                         if icall.ip() == DEBUGGING_IP {
-                            println!("Branch target not found in address map")
+                            eprintln!("Branch target not found in address map")
                         }
                         return;
                     };
@@ -192,7 +192,7 @@ impl Analyzer {
                     // get the branch target instruction
                     let Some(branch_target) = self.instructions.get(*branch_target_index) else {
                         if icall.ip() == DEBUGGING_IP {
-                            println!("Branch instruction not found in instr vec")
+                            eprintln!("Branch instruction not found in instr vec")
                         }
                         return;
                     };
@@ -238,10 +238,10 @@ impl Analyzer {
         });
 
         if icall.ip() == 0x28d3089 {
-            println!("cmp found: {}", cmp_found);
-            println!("call jmp found: {}", call_jump_found);
-            println!("ud1 jmp found: {}", ud1_jump_found);
-            println!("ud1 fallthrough found: {}", ud1_fallthrough_found);
+            eprintln!("cmp found: {}", cmp_found);
+            eprintln!("call jmp found: {}", call_jump_found);
+            eprintln!("ud1 jmp found: {}", ud1_jump_found);
+            eprintln!("ud1 fallthrough found: {}", ud1_fallthrough_found);
         }
 
         // if we found the compare
