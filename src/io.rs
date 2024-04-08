@@ -34,7 +34,7 @@ pub fn print_instruction(instr: &Instruction, formatter: &mut IntelFormatter) {
     println!("0x{:x} {}", instr.ip(), output);
 }
 
-pub fn print_results(checked: Vec<Instruction>, unchecked: Vec<Instruction>, verbose: bool) {
+pub fn print_results(checked: &Vec<Instruction>, unchecked: &Vec<Instruction>, verbose: bool) {
     let mut formatter = IntelFormatter::new();
     formatter.options_mut().set_hex_prefix("0x");
     formatter.options_mut().set_hex_suffix("");
