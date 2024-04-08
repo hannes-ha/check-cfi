@@ -47,12 +47,12 @@ pub fn print_results(checked: &Vec<Instruction>, unchecked: &Vec<Instruction>, v
     );
 
     if verbose {
-        println!("---Checked:---");
-        for instr in checked {
-            print_instruction(&instr, &mut formatter);
-        }
         println!("---Unchecked:---");
         for instr in unchecked {
+            print_instruction(&instr, &mut formatter);
+        }
+        println!("---Checked:---");
+        for instr in checked {
             print_instruction(&instr, &mut formatter);
         }
     }
