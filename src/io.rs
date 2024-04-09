@@ -1,31 +1,59 @@
-use std::fs;
+use core::fmt;
+use std::{fs, io};
 
 use iced_x86::{Formatter, Instruction, IntelFormatter};
 use object::{Object, ObjectSection};
 
-pub fn read_file(path: &str) -> (Vec<u8>, u64) {
+#[derive(Debug)]
+pub(crate) struct FileReadError {
+    msg: String,
+}
+impl fmt::Display for FileReadError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+impl FileReadError {
+    fn new(msg: String) -> FileReadError {
+        FileReadError {
+            msg: msg.to_string(),
+        }
+    }
+}
+
+impl From<object::Error> for FileReadError {
+    fn from(err: object::Error) -> Self {
+        FileReadError::new(err.to_string())
+    }
+}
+
+impl From<io::Error> for FileReadError {
+    fn from(err: io::Error) -> Self {
+        FileReadError::new(err.to_string())
+    }
+}
+
+pub fn read_file(path: &str) -> Result<(Vec<u8>, u64), FileReadError> {
     // read binary
-    let binary = fs::read(path).expect("Could not read file");
+    let binary = fs::read(path)?;
 
     // parse file
-    let file = object::File::parse(&*binary).expect("Could not parse file.");
+    let file = object::File::parse(&*binary)?;
 
     // get text segment
     let text_segment = file
         .sections()
         .find(|section| section.name().unwrap() == ".text")
-        .expect("No text segment found.");
+        .expect("Could not find .text section");
 
     // get address of segment
     let adress = text_segment.address();
 
     // extract data
-    let data = text_segment
-        .data()
-        .expect("Could not get data from .text section.");
+    let data = text_segment.data()?;
 
     // return as vector
-    (Vec::from(data), adress)
+    Ok((Vec::from(data), adress))
 }
 
 pub fn print_instruction(instr: &Instruction, formatter: &mut IntelFormatter) {
@@ -56,4 +84,5 @@ pub fn print_results(checked: &Vec<Instruction>, unchecked: &Vec<Instruction>, v
             print_instruction(&instr, &mut formatter);
         }
     }
+    println!();
 }
