@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
+use iced_x86::{
+    Decoder, DecoderOptions, Instruction, InstructionInfoFactory, Mnemonic, OpKind, Register,
+};
 use indicatif::ProgressStyle;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
@@ -32,6 +34,7 @@ pub struct Analyzer {
     address_map: HashMap<u64, usize>,
     checked: Vec<Instruction>,
     unchecked: Vec<Instruction>,
+    info_factory: InstructionInfoFactory,
 }
 
 impl Analyzer {
@@ -42,6 +45,7 @@ impl Analyzer {
             address_map: HashMap::new(),
             checked: Vec::new(),
             unchecked: Vec::new(),
+            info_factory: InstructionInfoFactory::new(),
         }
     }
     pub fn disassemble(&mut self, code: &[u8], offset: u64) {
@@ -137,6 +141,11 @@ impl Analyzer {
             })
             .collect::<Vec<_>>();
 
+        // if we did not find the instruction loading the call target, we cannot determine if this is cfi-checked
+        if relevant_instructions.len() == predecessors.len() {
+            return Err(());
+        }
+
         if icall.ip() == DEBUGGING_IP {
             eprintln!(
                 "Relevant instruction count: {}",
@@ -162,12 +171,58 @@ impl Analyzer {
 
         // order: looking for cmp -> looking for jump -> looking for fallthrough
 
+        // friends are registers that are considered relevant to the call target
+        // this is to avoid looking at completely irrelevant cmps, i.e. cmp rdi,r10 is not relevant if we are calling rax
+        // unless we have recently moved the value from rax to rdi
+        let mut friends = Vec::new();
+
+        let icall_target = match icall.op0_kind() {
+            OpKind::Register => icall.op0_register(),
+            OpKind::Memory => icall.memory_base(),
+            op => unimplemented!("OpKind: {:?} not implemented", op),
+        };
+
+        friends.push(icall_target);
+
         // we now iterate over the relevant instructions to find the two branches
         // reverse to get back to original order
         relevant_instructions.iter().rev().for_each(|instruction| {
-            // this may be made much stricter
             if instruction.mnemonic() == Mnemonic::Cmp {
-                cmp_found = true;
+                // if one of the compared operands is one of our friends, we have found the compare
+                let left = match instruction.op0_kind() {
+                    OpKind::Register => instruction.op0_register(),
+                    OpKind::Memory => instruction.memory_base(),
+                    _ => Register::None,
+                };
+
+                let right = match instruction.op1_kind() {
+                    OpKind::Register => instruction.op1_register(),
+                    OpKind::Memory => instruction.memory_base(),
+                    _ => Register::None,
+                };
+
+                if friends.contains(&left) || friends.contains(&right) {
+                    cmp_found = true;
+                }
+            }
+
+            if instruction.mnemonic() == Mnemonic::Mov {
+                let move_from = match instruction.op1_kind() {
+                    OpKind::Register => Ok(instruction.op1_register()),
+                    OpKind::Memory => Ok(instruction.memory_base()),
+                    _ => Err(()),
+                };
+
+                if move_from.is_ok() && friends.contains(&move_from.unwrap()) {
+                    // if we move from a friend to another register, we consider this register a friend as well
+                    let move_to = match instruction.op0_kind() {
+                        OpKind::Register => instruction.op0_register(),
+                        OpKind::Memory => instruction.memory_base(),
+                        _ => unimplemented!("OpKind: {:?} not implemented", instruction.op0_kind()),
+                    };
+
+                    friends.push(move_to);
+                }
             }
 
             // compare found, look for jump immediately following
