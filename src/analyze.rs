@@ -1,4 +1,3 @@
-use core::panic;
 use std::collections::HashMap;
 
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
@@ -6,7 +5,7 @@ use indicatif::ProgressStyle;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
-const DEBUGGING_IP: u64 = 0x28ea4fa;
+const DEBUGGING_IP: u64 = 0;
 
 /*
             idea:
@@ -81,16 +80,9 @@ impl Analyzer {
         );
 
         for icall in self.icalls.iter() {
-            match icall.op0_kind() {
-                OpKind::Register => match self.is_cfi_checked_reg(icall) {
-                    Ok(_) => self.checked.push(icall.clone()),
-                    _ => self.unchecked.push(icall.clone()),
-                },
-                OpKind::Memory => match self.is_cfi_checked_mem(icall) {
-                    Ok(_) => self.checked.push(icall.clone()),
-                    _ => self.unchecked.push(icall.clone()),
-                },
-                unknown_opkind => unimplemented!("OpKind: {:?}", unknown_opkind),
+            match self.is_cfi_checked(icall) {
+                Ok(_) => self.checked.push(icall.clone()),
+                _ => self.unchecked.push(icall.clone()),
             }
             progress.inc(1);
         }
@@ -101,10 +93,7 @@ impl Analyzer {
         (&self.checked, &self.unchecked)
     }
 
-    fn is_cfi_checked_reg(&self, icall: &Instruction) -> Result<(), ()> {
-        if icall.op0_kind() != OpKind::Register {
-            panic!("Expected register operand");
-        }
+    fn is_cfi_checked(&self, icall: &Instruction) -> Result<(), ()> {
         // look up the instructions index in the vector
         let Some(instruction_index) = self.address_map.get(&icall.ip()) else {
             return Err(());
@@ -130,12 +119,19 @@ impl Analyzer {
             .take_while(|instruction| {
                 match instruction.mnemonic() {
                     // stop if we run in to another call and we are using RAX for our call
-                    Mnemonic::Call => return icall.op0_register() != Register::RAX,
+                    Mnemonic::Call => match icall.op0_kind() {
+                        OpKind::Register => return icall.op0_register() != Register::RAX,
+                        OpKind::Memory => return icall.memory_base() != Register::RAX,
+                        unknown => unimplemented!("OpKind: {:?} not implemented", unknown),
+                    },
                     // stop where the call target is loaded
-                    Mnemonic::Mov => {
-                        return !(instruction.op0_kind() == OpKind::Register
-                            && instruction.op0_register() == icall.op0_register())
-                    }
+                    Mnemonic::Mov => match icall.op0_kind() {
+                        OpKind::Register => {
+                            return instruction.op0_register() != icall.op0_register()
+                        }
+                        OpKind::Memory => !(is_mem_op_matching(instruction, icall)),
+                        unknown => unimplemented!("OpKind: {:?} not implemented", unknown),
+                    },
                     _ => return true,
                 }
             })
@@ -241,7 +237,7 @@ impl Analyzer {
             }
         });
 
-        if icall.ip() == 0x28d3089 {
+        if icall.ip() == DEBUGGING_IP {
             eprintln!("cmp found: {}", cmp_found);
             eprintln!("call jmp found: {}", call_jump_found);
             eprintln!("ud1 jmp found: {}", ud1_jump_found);
@@ -260,13 +256,12 @@ impl Analyzer {
         }
         return Err(());
     }
+}
 
-
-    fn is_cfi_checked_mem(&self, icall: &Instruction) -> Result<(), ()> {
-        if icall.op0_kind() != OpKind::Memory {
-            panic!("Expected memory operand");
-        }
-
-        return Err(());
-    }
+fn is_mem_op_matching(ins_a: &Instruction, ins_b: &Instruction) -> bool {
+    // check if the memory operand is the same
+    return ins_a.memory_displacement64() == ins_b.memory_displacement64()
+        && ins_a.memory_base() == ins_b.memory_base()
+        && ins_a.memory_index() == ins_b.memory_index()
+        && ins_a.memory_index_scale() == ins_b.memory_index_scale();
 }
