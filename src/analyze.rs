@@ -271,10 +271,14 @@ impl Analyzer {
                     let mut instruction_iter = self.instructions.iter().skip(*branch_target_index);
 
                     for _ in 0..ARGUMENT_LOADING_INSTRUCTION_COUNT {
-                        let next_instruction = instruction_iter.next().unwrap();
-                        if next_instruction.ip() == icall.ip() {
-                            call_jump_found = true;
-                            return;
+                        match instruction_iter.next() {
+                            Some(next_instruction) => {
+                                if next_instruction.ip() == icall.ip() {
+                                    call_jump_found = true;
+                                    return;
+                                }
+                            },
+                            _ => return,
                         }
                     }
 
