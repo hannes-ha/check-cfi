@@ -6,7 +6,7 @@ use indicatif::ProgressStyle;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
-const DEBUGGING_IP: u64 = 0x28d3089;
+const DEBUGGING_IP: u64 = 0x28ea4fa;
 
 /*
             idea:
@@ -86,7 +86,11 @@ impl Analyzer {
                     Ok(_) => self.checked.push(icall.clone()),
                     _ => self.unchecked.push(icall.clone()),
                 },
-                _ => self.unchecked.push(icall.clone()),
+                OpKind::Memory => match self.is_cfi_checked_mem(icall) {
+                    Ok(_) => self.checked.push(icall.clone()),
+                    _ => self.unchecked.push(icall.clone()),
+                },
+                unknown_opkind => unimplemented!("OpKind: {:?}", unknown_opkind),
             }
             progress.inc(1);
         }
@@ -99,7 +103,7 @@ impl Analyzer {
 
     fn is_cfi_checked_reg(&self, icall: &Instruction) -> Result<(), ()> {
         if icall.op0_kind() != OpKind::Register {
-            panic!("Expected register as operand");
+            panic!("Expected register operand");
         }
         // look up the instructions index in the vector
         let Some(instruction_index) = self.address_map.get(&icall.ip()) else {
@@ -177,7 +181,7 @@ impl Analyzer {
                     if icall.ip() == DEBUGGING_IP {
                         eprintln!("JMP found");
                         eprintln!("Branch target: {}", instruction.near_branch_target());
-                        eprintln!("icall target: {}", icall.ip());
+                        eprintln!("icall ip: {}", icall.ip());
                     }
                     // look up the branch target in the address map
                     let Some(branch_target_index) =
@@ -254,6 +258,15 @@ impl Analyzer {
             // we are fine
             return Ok(());
         }
+        return Err(());
+    }
+
+
+    fn is_cfi_checked_mem(&self, icall: &Instruction) -> Result<(), ()> {
+        if icall.op0_kind() != OpKind::Memory {
+            panic!("Expected memory operand");
+        }
+
         return Err(());
     }
 }
