@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use iced_x86::{
-    Decoder, DecoderOptions, Instruction, InstructionInfoFactory, Mnemonic, OpKind, Register,
+    Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpKind,
+    Register,
 };
 use indicatif::ProgressStyle;
 
@@ -33,7 +34,7 @@ pub struct Analyzer {
     icalls: Vec<Instruction>,
     address_map: HashMap<u64, usize>,
     checked: Vec<Instruction>,
-    unchecked: Vec<Instruction>,
+    unchecked: Vec<(Instruction, String)>,
     info_factory: InstructionInfoFactory,
 }
 
@@ -63,7 +64,12 @@ impl Analyzer {
         for instruction in decoder.iter() {
             self.instructions.push(instruction);
             self.address_map.insert(instruction.ip(), i);
-            if instruction.is_call_far_indirect() || instruction.is_call_near_indirect() {
+
+            let flow_control = instruction.flow_control();
+
+            if flow_control == FlowControl::IndirectBranch
+                || flow_control == FlowControl::IndirectCall
+            {
                 if !instruction.is_ip_rel_memory_operand() {
                     self.icalls.push(instruction);
                 }
@@ -78,7 +84,7 @@ impl Analyzer {
     pub fn analyze(&mut self) {
         let progress = indicatif::ProgressBar::new(self.icalls.len() as u64);
         progress.set_style(
-            ProgressStyle::with_template("Analyzing: [{bar} {percent}%]")
+            ProgressStyle::with_template("Analyzing:     [{bar} {percent}%]")
                 .unwrap()
                 .progress_chars("=>-"),
         );
@@ -86,21 +92,21 @@ impl Analyzer {
         for icall in self.icalls.iter() {
             match self.is_cfi_checked(icall) {
                 Ok(_) => self.checked.push(icall.clone()),
-                _ => self.unchecked.push(icall.clone()),
+                Err(msg) => self.unchecked.push((icall.clone(), String::from(msg))),
             }
             progress.inc(1);
         }
         progress.finish();
     }
 
-    pub fn get_results(&self) -> (&Vec<Instruction>, &Vec<Instruction>) {
+    pub fn get_results(&self) -> (&Vec<Instruction>, &Vec<(Instruction, String)>) {
         (&self.checked, &self.unchecked)
     }
 
-    fn is_cfi_checked(&self, icall: &Instruction) -> Result<(), ()> {
+    fn is_cfi_checked(&self, icall: &Instruction) -> Result<(), &str> {
         // look up the instructions index in the vector
         let Some(instruction_index) = self.address_map.get(&icall.ip()) else {
-            return Err(());
+            return Err("Instruction not found in vector");
         };
 
         // predecessor index is instruction_index - 15 (minimum 0)
@@ -113,7 +119,7 @@ impl Analyzer {
         // get predecessors by slicing 15 instructions from the instruction vector
         let Some(predecessors) = self.instructions.get(predecessor_index..*instruction_index)
         else {
-            return Err(());
+            return Err("Could not get predecessors");
         };
 
         // save the predecessors up until the value of the call target is loaded
@@ -143,7 +149,7 @@ impl Analyzer {
 
         // if we did not find the instruction loading the call target, we cannot determine if this is cfi-checked
         if relevant_instructions.len() == predecessors.len() {
-            return Err(());
+            return Err("Could not find instruction loading jump target");
         }
 
         if icall.ip() == DEBUGGING_IP {
@@ -277,7 +283,7 @@ impl Analyzer {
                                     call_jump_found = true;
                                     return;
                                 }
-                            },
+                            }
                             _ => return,
                         }
                     }
@@ -304,16 +310,17 @@ impl Analyzer {
         }
 
         // if we found the compare
-        if cmp_found
-            // and call jump & ud1 fallthrough
-            && ((call_jump_found && ud1_fallthrough_found)
-            // or ud1 jump & call fallthrough
-            || (ud1_jump_found))
-        {
-            // we are fine
-            return Ok(());
+        if cmp_found {
+            // and call jump & ud1 fallthrough or ud1 jump & call fallthrough
+            if (call_jump_found && ud1_fallthrough_found) || (ud1_jump_found) {
+                // we are fine
+                return Ok(());
+            } else {
+                return Err("Ud1 branch not found");
+            }
+        } else {
+            return Err("Compare not found.");
         }
-        return Err(());
     }
 }
 
