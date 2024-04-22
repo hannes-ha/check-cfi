@@ -5,12 +5,13 @@ use iced_x86::{
     Register,
 };
 use indicatif::ProgressStyle;
+use petgraph::visit::Bfs;
 
 use crate::cfg::Cfg;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
-const DEBUGGING_IP: u64 = 0x5fb011;
+const DEBUGGING_IP: u64 = 0x5faed6;
 const BACKTRACK_LIMIT: usize = 200;
 
 #[allow(dead_code)]
@@ -22,6 +23,8 @@ pub struct Analyzer {
     checked: Vec<Instruction>,
     unchecked: Vec<(Instruction, String)>,
     info_factory: InstructionInfoFactory,
+    safe_calls: HashMap<u64, Register>,
+    function_borders: HashSet<u64>,
 }
 
 impl Analyzer {
@@ -34,6 +37,14 @@ impl Analyzer {
             checked: Vec::new(),
             unchecked: Vec::new(),
             info_factory: InstructionInfoFactory::new(),
+            safe_calls: HashMap::new(),
+            function_borders: HashSet::new(),
+        }
+    }
+
+    pub fn debug(ip: u64, msg: String) {
+        if ip == DEBUGGING_IP {
+            eprintln!("{}", msg)
         }
     }
 
@@ -74,10 +85,10 @@ impl Analyzer {
                 .progress_chars("=>-"),
         );
 
-        let mut i = 0;
+        let mut instruction_index = 0;
         for instruction in decoder.iter() {
             self.instructions.push(instruction);
-            self.address_map.insert(instruction.ip(), i);
+            self.address_map.insert(instruction.ip(), instruction_index);
 
             let flow_control = instruction.flow_control();
 
@@ -101,7 +112,15 @@ impl Analyzer {
                 }
             }
 
-            i += 1;
+            // use call targets to track function borders
+            if flow_control == FlowControl::Call {
+                if !instruction.is_ip_rel_memory_operand() {
+                    self.function_borders
+                        .insert(instruction.memory_displacement64());
+                }
+            }
+
+            instruction_index += 1;
             progress.inc(instruction.len() as u64);
         }
 
@@ -118,9 +137,13 @@ impl Analyzer {
 
         for icall in self.icalls.iter() {
             match self.is_cfi_checked_3(icall) {
-                Ok(_) => self.checked.push(icall.clone()),
+                Ok(_) => {
+                    self.safe_calls
+                        .insert(icall.ip(), get_register_or_mem_base(icall, 0));
+                    self.checked.push(icall.clone());
+                }
                 Err(msg) => self.unchecked.push((icall.clone(), msg)),
-            }
+            };
             progress.inc(1);
         }
         progress.finish();
@@ -170,14 +193,14 @@ impl Analyzer {
         // assert_untouched(&graph, cmp_instruction) -> bool
         //
         // running only ud1 check gives 191 "misses" wich is probably what to aim for.
-        // if no entrypoints, fail
+        // if no entrypoints, fail.
         if cfg.entrypoints.len() == 0 {
             return Err("No entrypoints found".to_string());
         }
 
-        for entrypoint in &cfg.entrypoints {
-            let _cmp_ip = cfg.find_compare(&self, *entrypoint)?;
-        }
+        // for entrypoint in &cfg.entrypoints {
+        let _cmp_ip = cfg.find_compare(&self, icall.ip())?;
+        // }
         Ok(())
     }
 
@@ -187,13 +210,13 @@ impl Analyzer {
         // insert the icall
         let icall_instruction = self.get_instruction(ip)?;
         cfg.add_node(ip);
-        let _icall_target = get_register_or_mem_base(&icall_instruction, 0);
+        let icall_target = get_register_or_mem_base(&icall_instruction, 0);
 
-        let mut queue = VecDeque::<u64>::new();
-        queue.push_back(ip);
+        let mut queue = VecDeque::<(u64, HashSet<Register>)>::new();
+        queue.push_back((ip, HashSet::default()));
 
         while !queue.is_empty() {
-            let Some(node_ip) = queue.pop_front() else {
+            let Some((node_ip, mut trusted_registers)) = queue.pop_front() else {
                 break;
             };
 
@@ -201,21 +224,105 @@ impl Analyzer {
             let parents = self.get_parents(node_ip)?;
             let mnemonic = instruction.mnemonic();
 
-            // we should stop as early as possible for performance reasons
-            // top of function is last resort and not very reliable
-            if mnemonic == Mnemonic::Push && instruction.op0_register() == Register::RBP
-                || mnemonic == Mnemonic::Push && instruction.op0_register() == Register::RSP
-                || instruction.flow_control() == FlowControl::Interrupt
-                || instruction.flow_control() == FlowControl::Return
-            {
+            // Stop at function border
+            if self.function_borders.contains(&instruction.ip()) {
                 cfg.entrypoints.push(node_ip);
                 continue;
             }
-            // stop when mov into cmp register
-            // if mnemonic == Mnemonic::Mov && instruction.op0_register() == icall_target {
-            //     cfg.entrypoints.push(node_ip);
-            //     continue;
+
+            // safe registers may come from two sources,
+            // either through a compare and jump to a ud1
+            if mnemonic == Mnemonic::Cmp {
+                Analyzer::debug(icall_instruction.ip(), "found cmp".to_string());
+                // check the cfg if this cmp leads to a ud1
+                let mut bfs = Bfs::new(&cfg.fwd_graph, node_ip);
+                while let Some(ip) = bfs.next(&cfg.fwd_graph) {
+                    let cmp_child = self.get_instruction(ip)?;
+                    Analyzer::debug(
+                        icall_instruction.ip(),
+                        format!("looking at child 0x{:x}", cmp_child.ip()),
+                    );
+                    if cmp_child.mnemonic() == Mnemonic::Ud1 {
+                        // the registers involved in the compare are now considered trusted
+                        trusted_registers.insert(instruction.op0_register());
+                        if icall_instruction.ip() == DEBUGGING_IP {
+                            eprintln!("Trusting {:?}", instruction.op0_register());
+                        }
+                        match instruction.op1_kind() {
+                            OpKind::Register => {
+                                if icall_instruction.ip() == DEBUGGING_IP {
+                                    eprintln!("Trusting {:?}", instruction.op1_register());
+                                }
+                                trusted_registers.insert(instruction.op1_register());
+                            }
+                            _ => (),
+                        }
+                    }
+
+                    if cmp_child.mnemonic() == Mnemonic::Jne
+                        || cmp_child.mnemonic() == Mnemonic::Je
+                        || cmp_child.mnemonic() == Mnemonic::Jae
+                    {
+                        Self::debug(node_ip, "found a jump".to_string());
+                        let Some(jump_target_index) =
+                            self.address_map.get(&cmp_child.near_branch_target())
+                        else {
+                            continue;
+                        };
+
+                        // get the branch target instruction
+                        let Some(branch_target) = self.instructions.get(*jump_target_index) else {
+                            continue;
+                        };
+
+                        // check if the branch target is a ud1
+                        // TODO fix duplication
+                        if branch_target.mnemonic() == Mnemonic::Ud1 {
+                            trusted_registers.insert(instruction.op0_register());
+                            if icall_instruction.ip() == DEBUGGING_IP {
+                                eprintln!("Trusting {:?}", instruction.op0_register());
+                            }
+                            match instruction.op1_kind() {
+                                OpKind::Register => {
+                                    if icall_instruction.ip() == DEBUGGING_IP {
+                                        eprintln!("Trusting {:?}", instruction.op1_register());
+                                    }
+                                    trusted_registers.insert(instruction.op1_register());
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
+                }
+            }
+            // ...or through a previously determined safe register
+            // needs love
+            // if instruction.is_call_far_indirect() || instruction.is_call_near_indirect() {
+            //     let Some(trusted_reg) = self.safe_calls.get(&instruction.ip()) else {}
+            //     trusted_registers.insert(trusted_reg);
             // }
+            //
+            // moving into registers propagate trust
+            // TODO might need sub here
+            if mnemonic == Mnemonic::Mov {
+                if trusted_registers.contains(&instruction.op0_register())
+                    && instruction.op1_kind() == OpKind::Register
+                {
+                    trusted_registers.insert(instruction.op1_register());
+                    trusted_registers.remove(&instruction.op0_register());
+                    if instruction.ip() == DEBUGGING_IP {
+                        eprintln!("Trusting {:?}", instruction.op1_register());
+                        eprintln!("Untrusting {:?}", instruction.op0_register());
+                        eprintln!("Trusted is now {:?}", trusted_registers);
+                    }
+                }
+            }
+
+            // if the call register is trusted, we can stop looking at this leg
+            if trusted_registers.contains(&icall_target) {
+                cfg.entrypoints.push(node_ip);
+                continue;
+            }
 
             for parent in parents {
                 let parent_ip = parent.ip();
@@ -223,7 +330,7 @@ impl Analyzer {
                 if !cfg.contains_node(parent_ip) {
                     cfg.add_node(parent_ip);
                     // we dont need to visit parents more than once
-                    queue.push_back(parent_ip);
+                    queue.push_back((parent_ip, trusted_registers.clone()));
                 }
                 // else just add edge
                 cfg.add_edge(parent_ip, node_ip);
@@ -239,10 +346,15 @@ impl Analyzer {
         let mut jump_prevs = self.get_jumps_to(ip);
         // check if chronological prev is really a parent
         match chronological_prev.flow_control() {
-            FlowControl::Call | FlowControl::Next | FlowControl::ConditionalBranch => {
-                jump_prevs.push(chronological_prev)
+            FlowControl::Call
+            | FlowControl::Next
+            | FlowControl::ConditionalBranch
+            | FlowControl::IndirectCall => jump_prevs.push(chronological_prev),
+            _ => {
+                if DEBUGGING_IP.abs_diff(ip) < 200 {
+                    eprintln!("stopping on 0x{:x}", ip)
+                }
             }
-            _ => (),
         }
         Ok(jump_prevs)
     }
