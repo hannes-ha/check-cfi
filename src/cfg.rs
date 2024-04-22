@@ -1,74 +1,7 @@
-use std::collections::VecDeque;
-
-use iced_x86::{FlowControl, Instruction, Mnemonic, Register};
+use iced_x86::Mnemonic;
 use petgraph::{graphmap::DiGraphMap, visit::Dfs};
 
-use crate::analyze::{get_register_or_mem_base, Analyzer};
-
-impl Analyzer {
-    pub fn generate_cfg(&self, ip: u64) -> Result<Cfg, String> {
-        let mut cfg = Cfg::new();
-
-        // insert the icall
-        let icall_instruction = self.get_instruction(ip)?;
-        cfg.add_node(ip);
-        let icall_target = get_register_or_mem_base(&icall_instruction, 0);
-
-        let mut queue = VecDeque::<u64>::new();
-        queue.push_back(ip);
-
-        while !queue.is_empty() {
-            let Some(node_ip) = queue.pop_front() else {
-                break;
-            };
-
-            let instruction = self.get_instruction(node_ip)?;
-            let parents = self.get_parents(node_ip)?;
-            let mnemonic = instruction.mnemonic();
-
-            if mnemonic == Mnemonic::Push && instruction.op0_register() == Register::RBP
-                || mnemonic == Mnemonic::Push && instruction.op0_register() == Register::RSP
-                || instruction.flow_control() == FlowControl::Interrupt
-                || instruction.flow_control() == FlowControl::Return
-            {
-                cfg.entrypoints.push(node_ip);
-                continue;
-            }
-            // if mnemonic == Mnemonic::Mov && instruction.op0_register() == icall_target {
-            //     cfg.entrypoints.push(node_ip);
-            //     continue;
-            // }
-
-            for parent in parents {
-                let parent_ip = parent.ip();
-                // add node if it doesnt already exist
-                if !cfg.contains_node(parent_ip) {
-                    cfg.add_node(parent_ip);
-                    // we dont need to visit parents more than once
-                    queue.push_back(parent_ip);
-                }
-                // else just add edge
-                cfg.add_edge(parent_ip, node_ip);
-            }
-        }
-
-        Ok(cfg)
-    }
-
-    fn get_parents(&self, ip: u64) -> Result<Vec<Instruction>, String> {
-        let index = self.get_instruction_index(ip)?;
-        let chronological_prev = self.get_instruction_from_index(index - 1)?;
-        let mut jump_prevs = self.get_jumps_to(ip);
-        // check if chronological prev is really a parent
-        match chronological_prev.flow_control() {
-            FlowControl::Call | FlowControl::Next | FlowControl::ConditionalBranch => {
-                jump_prevs.push(chronological_prev)
-            }
-            _ => (),
-        }
-        Ok(jump_prevs)
-    }
-}
+use crate::analyze::Analyzer;
 
 pub struct Cfg {
     pub fwd_graph: DiGraphMap<u64, ()>,
@@ -99,14 +32,16 @@ impl Cfg {
         self.fwd_graph.add_edge(from, to, ());
     }
 
+    // TODO: flip logic for bwd_graph
+    // shold use backward graph
     pub fn find_compare(&self, analyzer: &Analyzer, entrypoint: u64) -> Result<u64, String> {
-        let mut dfs = Dfs::new(&self.fwd_graph, entrypoint);
+        let mut dfs = Dfs::new(&self.bwd_graph, entrypoint);
 
         // address of the compare instruction
         let mut cmp_ip = 0;
         let mut ud1_found = false;
 
-        while let Some(ip) = dfs.next(&self.fwd_graph) {
+        while let Some(ip) = dfs.next(&self.bwd_graph) {
             let instruction = analyzer.get_instruction(ip)?;
 
             if instruction.mnemonic() == Mnemonic::Cmp {
