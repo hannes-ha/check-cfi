@@ -1,36 +1,31 @@
-use iced_x86::{OpAccess, Register};
-use petgraph::{algo::has_path_connecting, graphmap::DiGraphMap, visit::Dfs};
+use std::collections::HashSet;
 
-use crate::analyze::Analyzer;
+use iced_x86::{Instruction, OpAccess, Register};
+use petgraph::graphmap::DiGraphMap;
+
+use crate::analyze::{get_register_or_mem_base, Analyzer};
 
 pub struct Cfg {
     pub fwd_graph: DiGraphMap<u64, ()>,
     // we need a directed graph to be able to dfs "one way", but also a way to traverse the
     // instructions backwards
     pub bwd_graph: DiGraphMap<u64, ()>,
-    pub entrypoints: Vec<u64>,
-    cmp_ip: u64,
+    pub entrypoints: Vec<(u64, HashSet<Register>, u64)>,
+    target_icall: Instruction,
 }
 
 impl Cfg {
-    pub fn new() -> Self {
+    pub fn new(target_icall: Instruction) -> Self {
         Cfg {
             fwd_graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
             bwd_graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
             entrypoints: Vec::new(),
-            cmp_ip: 0,
+            target_icall,
         }
     }
 
     pub fn cmp_found(&self) -> bool {
-        return self.cmp_ip > 0;
-    }
-
-    pub fn set_cmp_ip(&mut self, ip: u64) {
-        if self.cmp_found() && ip != self.cmp_ip {
-            panic!("Duplicate cmp found");
-        }
-        self.cmp_ip = ip;
+        return self.entrypoints.iter().all(|(_, _, cmp_ip)| *cmp_ip > 0);
     }
 
     pub fn add_node(&mut self, value: u64) -> u64 {
@@ -47,43 +42,87 @@ impl Cfg {
         self.bwd_graph.add_edge(to, from, ());
     }
 
-    // visits the graph from the entrypoints and asserts that a given register is not written to
-    // between the entrypoints and the goal
-    pub fn assert_register_untouched(
+    pub fn untrust_dfs(
         &self,
         analyzer: &Analyzer,
-        goal: u64,
-        register: Register,
+        entry_point: u64,
+        trusted_registers: HashSet<Register>,
     ) -> Result<(), String> {
-        if register == Register::None {
-            panic!("Register none cannot be checked");
-        }
-        for entrypoint in &self.entrypoints {
-            let mut dfs = Dfs::new(&self.fwd_graph, *entrypoint);
-            while let Some(ip) = dfs.next(&self.fwd_graph) {
-                let instruction = analyzer.get_instruction(ip)?;
-                let info = analyzer.get_instruction_info(&instruction);
+        let mut stack = vec![(entry_point, trusted_registers)];
+        let mut visited = HashSet::<u64>::new();
 
-                let touched = info.used_registers().iter().any(|register_use| {
-                    return register_use.register() == register
-                        && match register_use.access() {
-                            OpAccess::Write
-                            | OpAccess::CondWrite
-                            | OpAccess::ReadWrite
-                            | OpAccess::ReadCondWrite => true,
-                            _ => false,
-                        };
+        // when the icall is reached, check wether the call register is trusted
+        while let Some((current_node, mut local_trusted)) = stack.pop() {
+            visited.insert(current_node);
+            if current_node == self.target_icall.ip() {
+                match local_trusted.contains(&get_register_or_mem_base(&self.target_icall, 0)) {
+                    true => continue,
+                    false => return Err("Call target not trusted".to_string()),
+                };
+            }
+
+            // dead end, this is fine
+            if self.fwd_graph.neighbors(current_node).count() == 0 {
+                continue;
+            };
+
+            let instruction = analyzer.get_instruction(current_node)?;
+            let info = analyzer.get_instruction_info(&instruction);
+
+            let written_registers = info
+                .used_registers()
+                .iter()
+                .filter(|register_use| match register_use.access() {
+                    OpAccess::Write
+                    | OpAccess::CondWrite
+                    | OpAccess::ReadWrite
+                    | OpAccess::ReadCondWrite => true,
+                    _ => false,
+                })
+                .map(|register_write_use| register_write_use.register())
+                .collect::<Vec<_>>();
+
+            let read_registers = info
+                .used_registers()
+                .iter()
+                .filter(|register_use| match register_use.access() {
+                    OpAccess::Read => true,
+                    _ => false,
+                })
+                .map(|register_read_use| register_read_use.register())
+                .collect::<Vec<_>>();
+
+            // if all read registers are safe, add written registers to trusted.
+            // otherwise remove all from trusted
+            if read_registers.iter().all(|r| local_trusted.contains(&r)) {
+                written_registers.iter().for_each(|w_r| {
+                    local_trusted.insert(*w_r);
                 });
+            } else {
+                written_registers.iter().for_each(|w_r| {
+                    local_trusted.remove(&w_r);
+                });
+            }
 
-                // if this node touches the register, check if there is a path from here to the
-                // goal
-                if touched && has_path_connecting(&self.fwd_graph, ip, goal, None) {
-                    return Err(format!(
-                        "Found connecting path between touching register at 0x{:x} and icall",
-                        ip
-                    ));
+            // this is flawed, as paths leading to the same node but with different states are
+            // discarded. dont know how to solve
+            for nb in self.fwd_graph.neighbors(current_node) {
+                if !visited.contains(&nb) {
+                    stack.push((nb, local_trusted.clone()));
                 }
             }
+        }
+
+        // all fine!
+        Ok(())
+    }
+
+    // visits the graph from the entrypoints and asserts that a given register is not written to
+    // between the compare and the goal, for each entrypoint as these might have different sets of
+    // trusted registers
+    pub fn assert_icall_to_trusted_register(&self, analyzer: &Analyzer) -> Result<(), String> {
+        for (_, trusted_registers, cmp_ip) in &self.entrypoints {
+            self.untrust_dfs(&analyzer, *cmp_ip, trusted_registers.clone())?;
         }
 
         Ok(())
