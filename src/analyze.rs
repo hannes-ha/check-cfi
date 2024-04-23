@@ -247,16 +247,12 @@ impl Analyzer {
             // either through a compare and jump to a ud1
             if mnemonic == Mnemonic::Cmp {
                 Analyzer::debug(icall_instruction.ip(), "found cmp".to_string());
-                // check the cfg if this cmp leads to a ud1
-                let mut bfs = Bfs::new(&cfg.fwd_graph, node_ip);
 
-                // TODO: Go deeper. Stop ad ud1 and any branching?
-                while let Some(ip) = bfs.next(&cfg.fwd_graph) {
-                    let cmp_child = self.get_instruction(ip)?;
+                let mut stack = self.get_children(&instruction)?;
+                while let Some(cmp_child) = stack.pop() {
                     if cmp_child.mnemonic() == Mnemonic::Ud1 {
                         // the registers involved in the compare are now considered trusted
                         trusted_registers.insert(instruction.op0_register());
-                        // cfg.set_cmp_ip(instruction.ip());
                         cmp_ip = instruction.ip();
                         if icall_instruction.ip() == DEBUGGING_IP {
                             eprintln!("Trusting {:?}", instruction.op0_register());
@@ -270,47 +266,27 @@ impl Analyzer {
                             }
                             _ => (),
                         }
+                        continue;
                     }
 
-                    if cmp_child.is_jcc_short_or_near() {
-                        let branch_target = self.get_instruction(cmp_child.near_branch_target())?;
-
-                        Self::debug(
-                            icall_instruction.ip(),
-                            format!("looking at jump target: 0x{:x}", branch_target.ip()),
-                        );
-
-                        // check if the branch target is a ud1
-                        // TODO fix duplication
-                        if branch_target.mnemonic() == Mnemonic::Ud1 {
-                            // cfg.set_cmp_ip(instruction.ip());
-                            cmp_ip = instruction.ip();
-                            trusted_registers.insert(instruction.op0_register());
-                            if icall_instruction.ip() == DEBUGGING_IP {
-                                eprintln!("Trusting {:?}", instruction.op0_register());
-                            }
-                            match instruction.op1_kind() {
-                                OpKind::Register => {
-                                    if icall_instruction.ip() == DEBUGGING_IP {
-                                        eprintln!("Trusting {:?}", instruction.op1_register());
-                                    }
-                                    trusted_registers.insert(instruction.op1_register());
-                                }
-                                _ => (),
-                            }
+                    // follow jumps. might be jmp -> jmp -> ud1
+                    if cmp_child.is_jmp_short_or_near() || cmp_child.is_jcc_short_or_near() {
+                        let grandchildren = self.get_children(&cmp_child)?;
+                        for gc in grandchildren {
+                            stack.push(gc);
                         }
                     }
                 }
             }
+
             // ...or through a previously determined safe register
             // needs love
             // if instruction.is_call_far_indirect() || instruction.is_call_near_indirect() {
             //     let Some(trusted_reg) = self.safe_calls.get(&instruction.ip()) else {}
             //     trusted_registers.insert(trusted_reg);
             // }
-            //
+
             // moving into registers propagate trust
-            // TODO might need sub here
             if mnemonic == Mnemonic::Mov {
                 if trusted_registers.contains(&instruction.op0_register()) {
                     trusted_registers.insert(instruction.op1_register());
@@ -329,19 +305,6 @@ impl Analyzer {
             if trusted_registers.contains(&icall_target) {
                 cfg.entrypoints.push((node_ip, trusted_registers, cmp_ip));
                 continue;
-            }
-
-            // if i am a conditional branch instruction also add my other child
-            // as this is not caught when traversing backwards, but does not really matter as these
-            // branches cannot lead to the call if not discovered by the parent check
-            // this is just to catch the fall-through ud1's
-            if instruction.is_jcc_short_or_near() {
-                let jump_target = instruction.near_branch_target();
-                let fallthrough = self
-                    .get_instruction_from_index(self.get_instruction_index(instruction.ip())? + 1)?
-                    .ip();
-                cfg.add_edge(node_ip, jump_target);
-                cfg.add_edge(node_ip, fallthrough);
             }
 
             for parent in parents {
