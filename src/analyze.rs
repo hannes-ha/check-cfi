@@ -22,7 +22,7 @@ pub struct Analyzer {
     jump_map: HashMap<u64, Vec<Instruction>>,
     checked: Vec<Instruction>,
     unchecked: Vec<(Instruction, String)>,
-    pub info_factory: InstructionInfoFactory,
+    info_factory: InstructionInfoFactory,
     safe_calls: HashMap<u64, Register>,
     function_borders: HashSet<u64>,
 }
@@ -221,9 +221,11 @@ impl Analyzer {
 
         // insert the icall
         let icall_instruction = self.get_instruction(ip)?;
-        cfg.add_node(ip);
         let icall_target = get_register_or_mem_base(&icall_instruction, 0);
 
+        cfg.add_node(ip);
+
+        // track set of trusted registers to limit search backwards
         let mut queue = VecDeque::<(u64, HashSet<Register>)>::new();
         queue.push_back((ip, HashSet::default()));
 
@@ -238,7 +240,7 @@ impl Analyzer {
 
             // Stop at function border
             if self.function_borders.contains(&instruction.ip()) {
-                cfg.entrypoints.push(node_ip);
+                cfg.entrypoints.push(node_ip); // should this really be an entrypoint?????
                 continue;
             }
 
@@ -248,6 +250,8 @@ impl Analyzer {
                 Analyzer::debug(icall_instruction.ip(), "found cmp".to_string());
                 // check the cfg if this cmp leads to a ud1
                 let mut bfs = Bfs::new(&cfg.fwd_graph, node_ip);
+
+                // TODO: Go deeper.
                 while let Some(ip) = bfs.next(&cfg.fwd_graph) {
                     let cmp_child = self.get_instruction(ip)?;
                     if cmp_child.mnemonic() == Mnemonic::Ud1 {
@@ -372,6 +376,35 @@ impl Analyzer {
             }
         }
         Ok(jump_prevs)
+    }
+
+    fn get_children(&self, instruction: &Instruction) -> Result<Vec<Instruction>, String> {
+        let index = self.get_instruction_index(instruction.ip())?;
+        let chronological_next = self.get_instruction_from_index(index + 1)?;
+
+        match instruction.flow_control() {
+            // one child (next)
+            FlowControl::Next | FlowControl::Call | FlowControl::XbeginXabortXend => {
+                Ok(vec![chronological_next])
+            }
+
+            // one child (jmp target)
+            FlowControl::UnconditionalBranch => {
+                let branch_target = self.get_instruction(instruction.near_branch_target())?;
+                Ok(vec![branch_target])
+            }
+
+            // twho chilren, next and jump target
+            FlowControl::ConditionalBranch => {
+                let branch_target = self.get_instruction(instruction.near_branch_target())?;
+                Ok(vec![branch_target, chronological_next])
+            }
+
+            // one child, undecideable
+            FlowControl::IndirectCall | FlowControl::IndirectBranch |
+            // no children
+            FlowControl::Interrupt | FlowControl::Return | FlowControl::Exception => Ok(Vec::new()),
+        }
     }
 
     #[allow(dead_code)]
