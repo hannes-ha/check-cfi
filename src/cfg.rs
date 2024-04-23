@@ -1,7 +1,5 @@
-use core::panic;
-
-use iced_x86::Mnemonic;
-use petgraph::{graphmap::DiGraphMap, visit::Dfs};
+use iced_x86::{OpAccess, Register};
+use petgraph::{algo::has_path_connecting, graphmap::DiGraphMap, visit::Dfs};
 
 use crate::analyze::Analyzer;
 
@@ -11,6 +9,7 @@ pub struct Cfg {
     // instructions backwards
     pub bwd_graph: DiGraphMap<u64, ()>,
     pub entrypoints: Vec<u64>,
+    cmp_ip: u64,
 }
 
 impl Cfg {
@@ -19,7 +18,19 @@ impl Cfg {
             fwd_graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
             bwd_graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
             entrypoints: Vec::new(),
+            cmp_ip: 0,
         }
+    }
+
+    pub fn cmp_found(&self) -> bool {
+        return self.cmp_ip > 0;
+    }
+
+    pub fn set_cmp_ip(&mut self, ip: u64) {
+        if self.cmp_found() && ip != self.cmp_ip {
+            panic!("Duplicate cmp found");
+        }
+        self.cmp_ip = ip;
     }
 
     pub fn add_node(&mut self, value: u64) -> u64 {
@@ -36,47 +47,45 @@ impl Cfg {
         self.bwd_graph.add_edge(to, from, ());
     }
 
-    // looks backwards for the ud1 and related compare
-    pub fn find_compare(&self, analyzer: &Analyzer, entrypoint: u64) -> Result<u64, String> {
-        let mut dfs = Dfs::new(&self.bwd_graph, entrypoint);
+    // visits the graph from the entrypoints and asserts that a given register is not written to
+    // between the entrypoints and the goal
+    pub fn assert_register_untouched(
+        &self,
+        analyzer: &Analyzer,
+        goal: u64,
+        register: Register,
+    ) -> Result<(), String> {
+        if register == Register::None {
+            panic!("Register none cannot be checked");
+        }
+        for entrypoint in &self.entrypoints {
+            let mut dfs = Dfs::new(&self.fwd_graph, *entrypoint);
+            while let Some(ip) = dfs.next(&self.fwd_graph) {
+                let instruction = analyzer.get_instruction(ip)?;
+                let info = analyzer.get_instruction_info(&instruction);
 
-        // address of the compare instruction
-        let mut cmp_ip = 0;
-        let mut ud1_found = false;
+                let touched = info.used_registers().iter().any(|register_use| {
+                    return register_use.register() == register
+                        && match register_use.access() {
+                            OpAccess::Write
+                            | OpAccess::CondWrite
+                            | OpAccess::ReadWrite
+                            | OpAccess::ReadCondWrite => true,
+                            _ => false,
+                        };
+                });
 
-        let mut itt = 0;
-        while let Some(ip) = dfs.next(&self.bwd_graph) {
-            itt += 1;
-            let instruction = analyzer.get_instruction(ip)?;
-
-            if instruction.mnemonic() == Mnemonic::Ud1 {
-                if ud1_found {
-                    panic!("duplicate ud1");
+                // if this node touches the register, check if there is a path from here to the
+                // goal
+                if touched && has_path_connecting(&self.fwd_graph, ip, goal, None) {
+                    return Err(format!(
+                        "Found connecting path between touching register at 0x{:x} and icall",
+                        ip
+                    ));
                 }
-                ud1_found = true;
-                continue;
-            }
-
-            if instruction.is_jcc_short_or_near() || instruction.is_jmp_short_or_near() {
-                let jcc_target = analyzer.get_instruction(instruction.near_branch_target())?;
-                if jcc_target.mnemonic() == Mnemonic::Ud1 {
-                    if ud1_found {
-                        panic!("duplicate ud1");
-                    }
-                    ud1_found = true;
-                    continue;
-                }
-            }
-
-            if instruction.mnemonic() == Mnemonic::Cmp && ud1_found {
-                cmp_ip = instruction.ip();
-                break;
             }
         }
 
-        if cmp_ip > 0 && ud1_found {
-            return Ok(cmp_ip);
-        }
-        Err(format!("could not find compare after {} iterations", itt))
+        Ok(())
     }
 }
