@@ -90,3 +90,14 @@ pub fn print_results(
     }
     println!();
 }
+
+pub fn progress_bar(len: u64, msg: &str) -> indicatif::ProgressBar {
+    let progress = indicatif::ProgressBar::new(len);
+    let content = format!("{:>15}", msg) + ": [{bar} {percent}%]";
+    progress.set_style(
+        indicatif::ProgressStyle::with_template(&content)
+            .unwrap()
+            .progress_chars("=>-"),
+    );
+    return progress;
+}
