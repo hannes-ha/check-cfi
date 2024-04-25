@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use iced_x86::{
     Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfo, InstructionInfoFactory,
-    Mnemonic, OpKind, Register,
+    Mnemonic, OpAccess, OpKind, Register,
 };
 
 use crate::{cfg::Cfg, io};
@@ -18,7 +18,6 @@ pub struct Analyzer {
     jump_map: HashMap<u64, Vec<Instruction>>,
     checked: Vec<Instruction>,
     unchecked: Vec<(Instruction, String)>,
-    info_factory: InstructionInfoFactory,
     safe_calls: HashMap<u64, Register>,
     function_borders: HashSet<u64>,
 }
@@ -33,15 +32,14 @@ impl Analyzer {
             jump_map: HashMap::new(),
             checked: Vec::new(),
             unchecked: Vec::new(),
-            info_factory: InstructionInfoFactory::new(),
             safe_calls: HashMap::new(),
             function_borders: HashSet::new(),
         }
     }
 
-    pub fn get_instruction_info(&self, instruction: &Instruction) -> InstructionInfo {
-        let mut info_factory = InstructionInfoFactory::new();
-        info_factory.info(instruction).clone()
+    pub fn get_instruction_info(&self, ip: u64) -> Result<InstructionInfo, String> {
+        let instruction = self.get_instruction(ip)?;
+        Ok(InstructionInfoFactory::new().info(&instruction).clone())
     }
 
     pub fn debug(ip: u64, msg: String) {
@@ -74,6 +72,37 @@ impl Analyzer {
     pub fn get_instruction(&self, ip: u64) -> Result<Instruction, String> {
         let index = self.get_instruction_index(ip)?;
         self.get_instruction_from_index(index)
+    }
+
+    pub fn get_written_registers(&self, ip: u64) -> Result<Vec<Register>, String> {
+        let written_regs = self
+            .get_instruction_info(ip)?
+            .used_registers()
+            .iter()
+            .filter(|register_use| match register_use.access() {
+                OpAccess::Write
+                | OpAccess::CondWrite
+                | OpAccess::ReadWrite
+                | OpAccess::ReadCondWrite => true,
+                _ => false,
+            })
+            .map(|register_write_use| register_write_use.register())
+            .collect::<Vec<Register>>();
+        Ok(written_regs)
+    }
+
+    pub fn get_read_registers(&self, ip: u64) -> Result<Vec<Register>, String> {
+        let read_regs = self
+            .get_instruction_info(ip)?
+            .used_registers()
+            .iter()
+            .filter(|register_use| match register_use.access() {
+                OpAccess::Read => true,
+                _ => false,
+            })
+            .map(|register_read_use| register_read_use.register())
+            .collect::<Vec<_>>();
+        Ok(read_regs)
     }
 
     pub fn disassemble(&mut self, code: &[u8], code_seg_offset: u64) {
