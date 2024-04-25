@@ -1,14 +1,11 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use iced_x86::{
     Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfo, InstructionInfoFactory,
-    Mnemonic, OpAccess, OpKind, Register,
+    OpAccess, OpKind, Register,
 };
 
-use crate::{
-    cfg::{CallPath, Cfg},
-    io,
-};
+use crate::{cfg::Cfg, io};
 
 const DEBUGGING_IP: u64 = 0;
 
@@ -65,6 +62,9 @@ impl Analyzer {
         }
     }
 
+    pub fn is_function_border(&self, ip: &u64) -> bool {
+        return self.function_borders.contains(ip);
+    }
     pub fn get_instruction_from_index(&self, index: usize) -> Result<Instruction, String> {
         match self.instructions.get(index) {
             Some(&instruction) => Ok(instruction),
@@ -178,7 +178,7 @@ impl Analyzer {
     }
 
     fn is_cfi_checked(&self, icall: &Instruction) -> Result<(), String> {
-        let cfg = self.generate_cfg(icall.ip())?;
+        let cfg = Cfg::new(*icall, self)?;
 
         if cfg.graph.node_count() > 1500 {
             eprintln!(
@@ -224,111 +224,7 @@ impl Analyzer {
         Ok(())
     }
 
-    pub fn generate_cfg(&self, ip: u64) -> Result<Cfg, String> {
-        let icall_instruction = self.get_instruction(ip)?;
-        let mut cfg = Cfg::new(icall_instruction.clone());
-
-        // insert the icall
-        let icall_target = get_register_or_mem_base(&icall_instruction, 0);
-
-        cfg.add_node(ip);
-
-        // track set of trusted registers to limit search backwards
-        let mut queue = VecDeque::<(u64, HashSet<Register>, u64)>::new();
-        queue.push_back((ip, HashSet::default(), 0));
-
-        while !queue.is_empty() {
-            let Some((node_ip, mut trusted_registers, mut cmp_ip)) = queue.pop_front() else {
-                break;
-            };
-
-            let instruction = self.get_instruction(node_ip)?;
-            let parents = self.get_parents(node_ip)?;
-            let mnemonic = instruction.mnemonic();
-
-            // Stop at function border
-            if self.function_borders.contains(&instruction.ip()) {
-                cfg.call_paths
-                    .push(CallPath::new(node_ip, trusted_registers, cmp_ip));
-                continue;
-            }
-
-            // trusted registers evolve from a cmp leading to a ud1
-            if mnemonic == Mnemonic::Cmp {
-                Analyzer::debug(ip, "found cmp".to_string());
-
-                let mut stack = self.get_children(&instruction)?;
-                let mut visited = HashSet::new();
-                while let Some(cmp_child) = stack.pop() {
-                    visited.insert(cmp_child.ip());
-                    if cmp_child.mnemonic() == Mnemonic::Ud1 {
-                        // the registers involved in the compare are now considered trusted
-                        trusted_registers.insert(instruction.op0_register());
-                        cmp_ip = instruction.ip();
-                        Analyzer::debug(ip, format!("Trusting {:?}", instruction.op0_register()));
-
-                        match instruction.op1_kind() {
-                            OpKind::Register => {
-                                Analyzer::debug(
-                                    ip,
-                                    format!("Trusting {:?}", instruction.op1_register()),
-                                );
-                                trusted_registers.insert(instruction.op1_register());
-                            }
-                            _ => (),
-                        }
-                        continue;
-                    }
-
-                    // follow jumps. might be jmp -> jmp -> ud1
-                    // do not follow nodes not on path unless jumps
-                    if cmp_child.is_jmp_short_or_near()
-                        || cmp_child.is_jcc_short_or_near()
-                        || cfg.graph.contains_node(cmp_child.ip())
-                    {
-                        self.get_children(&cmp_child)?.iter().for_each(|gc| {
-                            if !visited.contains(&gc.ip()) {
-                                stack.push(*gc)
-                            }
-                        });
-                    }
-                }
-            }
-
-            // moving into registers propagate trust
-            if mnemonic == Mnemonic::Mov {
-                if trusted_registers.contains(&instruction.op0_register()) {
-                    trusted_registers.insert(instruction.op1_register());
-                    if instruction.op1_kind() == OpKind::Register {
-                        trusted_registers.remove(&instruction.op0_register());
-                    }
-                }
-            }
-
-            // if the call register is trusted, we can stop looking at this leg
-            if trusted_registers.contains(&icall_target) {
-                cfg.call_paths
-                    .push(CallPath::new(node_ip, trusted_registers, cmp_ip));
-                continue;
-            }
-
-            for parent in parents {
-                let parent_ip = parent.ip();
-                // add node if it doesnt already exist
-                if !cfg.contains_node(parent_ip) {
-                    cfg.add_node(parent_ip);
-                    // we dont need to visit parents more than once
-                    queue.push_back((parent_ip, trusted_registers.clone(), cmp_ip));
-                }
-                // else just add edge
-                cfg.add_edge(parent_ip, node_ip);
-            }
-        }
-
-        Ok(cfg)
-    }
-
-    fn get_parents(&self, ip: u64) -> Result<Vec<Instruction>, String> {
+    pub fn get_parents(&self, ip: u64) -> Result<Vec<Instruction>, String> {
         let index = self.get_instruction_index(ip)?;
         let chronological_prev = self.get_instruction_from_index(index - 1)?;
         let mut jump_prevs = self.get_jumps_to(ip);
@@ -344,8 +240,9 @@ impl Analyzer {
         Ok(jump_prevs)
     }
 
-    fn get_children(&self, instruction: &Instruction) -> Result<Vec<Instruction>, String> {
-        let index = self.get_instruction_index(instruction.ip())?;
+    pub fn get_children(&self, ip: u64) -> Result<Vec<Instruction>, String> {
+        let instruction = self.get_instruction(ip)?;
+        let index = self.get_instruction_index(ip)?;
         let chronological_next = self.get_instruction_from_index(index + 1)?;
 
         match instruction.flow_control() {
