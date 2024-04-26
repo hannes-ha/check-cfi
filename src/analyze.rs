@@ -7,7 +7,7 @@ use iced_x86::{
 
 use crate::{cfg::Cfg, io};
 
-const DEBUGGING_IP: u64 = 0;
+const DEBUGGING_IP: u64 = 0xb9db65;
 
 #[allow(dead_code)]
 pub struct Analyzer {
@@ -162,11 +162,15 @@ impl Analyzer {
         for icall in self.icalls.iter() {
             match self.is_cfi_checked(icall) {
                 Ok(_) => {
+                    Self::debug(icall.ip(), "Trusted".to_string());
                     self.safe_calls
                         .insert(icall.ip(), get_register_or_mem_base(icall, 0));
                     self.checked.push(icall.clone()); // TODO: remove
                 }
-                Err(msg) => self.unchecked.push((icall.clone(), msg.to_string())),
+                Err(msg) => {
+                    Self::debug(icall.ip(), format!("NOT trusted: {}", msg));
+                    self.unchecked.push((icall.clone(), msg.to_string()))
+                }
             };
             progress.inc(1);
         }
@@ -194,7 +198,12 @@ impl Analyzer {
                     .all_edges()
                     .map(|e| {
                         let (from, to, _) = e;
-                        return format!("0x{:x} -> 0x{:x}", from, to);
+                        return format!(
+                            "0x{:x} -> 0x{:x}. Instruction: {:?}",
+                            from,
+                            to,
+                            self.get_instruction(from).unwrap().mnemonic()
+                        );
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -234,6 +243,8 @@ impl Analyzer {
             FlowControl::Call
             | FlowControl::Next
             | FlowControl::ConditionalBranch
+            | FlowControl::Return // we want to discover function borders in the cfg, so keep returns as
+                // a parent for now
             | FlowControl::IndirectCall => jump_prevs.push(chronological_prev),
             _ => (),
         }
@@ -276,5 +287,17 @@ pub fn get_register_or_mem_base(instruction: &Instruction, position: u32) -> Reg
         OpKind::Register => instruction.op_register(position),
         OpKind::Memory => instruction.memory_base(),
         unknown => unimplemented!("unknown opkind {:?}", unknown),
+    }
+}
+
+pub fn is_callee_saved(register: &Register) -> bool {
+    match register {
+        Register::RBX
+        | Register::RBP
+        | Register::R12
+        | Register::R13
+        | Register::R14
+        | Register::R15 => true,
+        _ => false,
     }
 }
