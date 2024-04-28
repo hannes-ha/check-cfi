@@ -59,6 +59,8 @@ impl Cfg {
             // Stop at function border
             if analyzer.is_function_border(&call_path.entrypoint)
                 || instruction.flow_control() == FlowControl::Return
+                || (instruction.mnemonic() == Mnemonic::Push
+                    && instruction.op0_register() == Register::RBP)
             {
                 call_paths.push(call_path);
                 continue;
