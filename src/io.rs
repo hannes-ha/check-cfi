@@ -1,8 +1,8 @@
 use core::fmt;
-use std::{fs, io};
+use std::{collections::HashMap, fs, io};
 
 use iced_x86::{Formatter, Instruction, IntelFormatter};
-use object::{Object, ObjectSection};
+use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
 
 #[derive(Debug)]
 pub(crate) struct FileReadError {
@@ -33,7 +33,7 @@ impl From<io::Error> for FileReadError {
     }
 }
 
-pub fn read_file(path: &str) -> Result<(Vec<u8>, u64), FileReadError> {
+pub fn read_file(path: &str) -> Result<(Vec<u8>, u64, HashMap<u64, String>), FileReadError> {
     // read binary
     let binary = fs::read(path)?;
 
@@ -52,20 +52,38 @@ pub fn read_file(path: &str) -> Result<(Vec<u8>, u64), FileReadError> {
     // extract data
     let data = text_segment.data()?;
 
+    let mut symbols = HashMap::<u64, String>::new();
+    for symbol in file.symbol_map().symbols() {
+        symbols.insert(symbol.address(), symbol.name().to_string());
+    }
+
     // return as vector
-    Ok((Vec::from(data), adress))
+    Ok((Vec::from(data), adress, symbols))
 }
 
-pub fn print_instruction(instr: &Instruction, message: String, formatter: &mut IntelFormatter) {
+pub fn print_instruction(
+    instr: &Instruction,
+    message: String,
+    symbol: String,
+    formatter: &mut IntelFormatter,
+) {
     let mut output = String::new();
+
     formatter.format(instr, &mut output);
-    println!("0x{:x} {:<30} {}", instr.ip(), output, message);
+    println!(
+        "0x{:x} {:<30} {:<40} {}",
+        instr.ip(),
+        output,
+        symbol,
+        message
+    );
 }
 
 pub fn print_results(
     checked: &Vec<Instruction>,
     unchecked: &Vec<(Instruction, String)>,
     verbose: bool,
+    symbol_map: &HashMap<u64, String>,
 ) {
     let mut formatter = IntelFormatter::new();
     formatter.options_mut().set_hex_prefix("0x");
@@ -81,11 +99,19 @@ pub fn print_results(
     if verbose {
         println!("---Unchecked:---");
         for (instr, msg) in unchecked {
-            print_instruction(&instr, msg.to_string(), &mut formatter);
+            let symbol = match symbol_map.get(&instr.ip()) {
+                Some(str) => str.to_string(),
+                _ => "".to_string(),
+            };
+            print_instruction(&instr, msg.to_string(), symbol.to_string(), &mut formatter);
         }
         println!("---Checked:---");
         for instr in checked {
-            print_instruction(&instr, "".to_string(), &mut formatter);
+            let symbol = match symbol_map.get(&instr.ip()) {
+                Some(str) => str.to_string(),
+                _ => "".to_string(),
+            };
+            print_instruction(&instr, "".to_string(), symbol, &mut formatter);
         }
     }
     println!();

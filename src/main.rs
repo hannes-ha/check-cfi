@@ -27,12 +27,12 @@ fn main() {
         eprintln!("Checking file: {}", path);
 
         match io::read_file(&path) {
-            Ok((file_content, offset)) => {
+            Ok((file_content, offset, mut symbols)) => {
                 let mut analyzer = Analyzer::new(cli.backtrack_limit);
-                analyzer.disassemble(&file_content, offset);
+                analyzer.disassemble(&file_content, offset, &mut symbols);
                 analyzer.analyze();
                 let (checked, unchecked) = analyzer.get_results();
-                io::print_results(checked, unchecked, cli.verbose);
+                io::print_results(checked, unchecked, cli.verbose, &symbols);
             }
             Err(e) => {
                 eprintln!("Could not read file: {}\n", e);
