@@ -65,24 +65,31 @@ pub fn print_instruction(
     instr: &Instruction,
     message: String,
     symbol: String,
+    format: &Option<String>,
     formatter: &mut IntelFormatter,
 ) {
     let mut output = String::new();
 
     formatter.format(instr, &mut output);
-    println!(
-        "0x{:x} {:<30} {:<40} {}",
-        instr.ip(),
-        output,
-        symbol,
-        message
-    );
+    match format.as_deref() {
+        Some("csv") => {
+            println!("0x{:x},{},{},{}", instr.ip(), output, symbol, message)
+        }
+        _ => println!(
+            "0x{:x} {:<30} {:<40} {}",
+            instr.ip(),
+            output,
+            symbol,
+            message
+        ),
+    }
 }
 
 pub fn print_results(
     checked: &Vec<Instruction>,
     unchecked: &Vec<(Instruction, String)>,
-    verbose: bool,
+    verbose: &bool,
+    format: &Option<String>,
     symbol_map: &HashMap<u64, String>,
 ) {
     let mut formatter = IntelFormatter::new();
@@ -96,14 +103,20 @@ pub fn print_results(
         unchecked.len()
     );
 
-    if verbose {
+    if *verbose {
         println!("---Unchecked:---");
         for (instr, msg) in unchecked {
             let symbol = match symbol_map.get(&instr.ip()) {
                 Some(str) => str.to_string(),
                 _ => "".to_string(),
             };
-            print_instruction(&instr, msg.to_string(), symbol.to_string(), &mut formatter);
+            print_instruction(
+                &instr,
+                msg.to_string(),
+                symbol.to_string(),
+                format,
+                &mut formatter,
+            );
         }
         println!("---Checked:---");
         for instr in checked {
@@ -111,7 +124,7 @@ pub fn print_results(
                 Some(str) => str.to_string(),
                 _ => "".to_string(),
             };
-            print_instruction(&instr, "".to_string(), symbol, &mut formatter);
+            print_instruction(&instr, "".to_string(), symbol, format, &mut formatter);
         }
     }
     println!();

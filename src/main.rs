@@ -17,6 +17,9 @@ struct Cli {
 
     #[arg(short, long)]
     backtrack_limit: Option<usize>,
+
+    #[arg(short, long)]
+    format: Option<String>,
 }
 
 fn main() {
@@ -32,7 +35,7 @@ fn main() {
                 analyzer.disassemble(&file_content, offset, &mut symbols);
                 analyzer.analyze();
                 let (checked, unchecked) = analyzer.get_results();
-                io::print_results(checked, unchecked, cli.verbose, &symbols);
+                io::print_results(checked, unchecked, &cli.verbose, &cli.format, &symbols);
             }
             Err(e) => {
                 eprintln!("Could not read file: {}\n", e);
