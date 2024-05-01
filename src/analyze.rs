@@ -135,10 +135,8 @@ impl Analyzer {
             if flow_control == FlowControl::IndirectCall
             // || flow_control == FlowControl::IndirectBranch
             {
-                if !instruction.is_ip_rel_memory_operand() {
-                    self.icalls.push(instruction);
-                    symbol_map.insert(instruction.ip(), current_symbol.clone());
-                }
+                self.icalls.push(instruction);
+                symbol_map.insert(instruction.ip(), current_symbol.clone());
             }
 
             // track close jumps to be able to construct cfg later
@@ -252,11 +250,13 @@ impl Analyzer {
 
     pub fn get_parents(&self, ip: u64) -> Result<Vec<Instruction>, String> {
         let index = self.get_instruction_index(ip)?;
-        let chronological_prev = self.get_instruction_from_index(index - 1)?;
         let mut jump_prevs = self.get_jumps_to(ip);
 
-        // check if chronological prev is really a parent
-        match chronological_prev.flow_control() {
+        if index > 1 {
+            let chronological_prev = self.get_instruction_from_index(index - 1)?;
+
+            // check if chronological prev is really a parent
+            match chronological_prev.flow_control() {
             FlowControl::Call
             | FlowControl::Next
             | FlowControl::ConditionalBranch
@@ -264,6 +264,7 @@ impl Analyzer {
                 // a parent for now
             | FlowControl::IndirectCall => jump_prevs.push(chronological_prev),
             _ => (),
+        }
         }
         Ok(jump_prevs)
     }
