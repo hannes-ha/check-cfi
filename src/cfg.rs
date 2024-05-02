@@ -142,14 +142,14 @@ impl Cfg {
             }
 
             // LEA from jump table considered trusted
-            if mnemonic == Mnemonic::Lea {
-                if is_load_from_jmp_table(&analyzer, instruction) {
-                    call_path
-                        .trusted_registers
-                        .insert(instruction.op0_register());
-                    call_path.load_ip = instruction.ip();
-                }
-            }
+            // if mnemonic == Mnemonic::Lea {
+            //     if is_load_from_jmp_table(&analyzer, instruction) {
+            //         call_path
+            //             .trusted_registers
+            //             .insert(instruction.op0_register());
+            //         call_path.load_ip = instruction.ip();
+            //     }
+            // }
 
             let parents = analyzer.get_parents(call_path.entrypoint)?;
 
@@ -236,18 +236,18 @@ impl Cfg {
             }
 
             let instruction = analyzer.get_instruction(current_node)?;
-            if instruction.mnemonic() == Mnemonic::Lea
-                && is_load_from_jmp_table(&analyzer, instruction)
-            {
-                Analyzer::debug(
-                    self.target_icall.ip(),
-                    format!("found load from jmp table at 0x{:x}", instruction.ip()),
-                );
-                if !is_stack_relative(&instruction, 0) {
-                    local_trusted.insert(instruction.op0_register());
-                }
-            }
-
+            // if instruction.mnemonic() == Mnemonic::Lea
+            //     && is_load_from_jmp_table(&analyzer, instruction)
+            // {
+            //     Analyzer::debug(
+            //         self.target_icall.ip(),
+            //         format!("found load from jmp table at 0x{:x}", instruction.ip()),
+            //     );
+            //     if !is_stack_relative(&instruction, 0) {
+            //         local_trusted.insert(instruction.op0_register());
+            //     }
+            // }
+            //
             // if we pass a call, untrust everything that is not callee-saved
             if instruction.mnemonic() == Mnemonic::Call {
                 let current_trusted = local_trusted.clone();
@@ -283,6 +283,7 @@ impl Cfg {
 
 // Handle edge case where LEA reg [read-only] -> call reg
 // Not really an indirect call
+#[allow(unused)]
 fn is_load_from_jmp_table(analyzer: &Analyzer, lea_instruction: Instruction) -> bool {
     let lea_target = lea_instruction.memory_displacement64();
     // this indirectly checks that the load is from within .text segment
