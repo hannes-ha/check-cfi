@@ -1,4 +1,7 @@
-use std::collections::{HashSet, VecDeque};
+use std::{
+    collections::{HashSet, VecDeque},
+    error::Error,
+};
 
 use iced_x86::{FlowControl, Instruction, Mnemonic, OpKind, Register};
 use petgraph::graphmap::DiGraphMap;
@@ -89,18 +92,18 @@ impl Cfg {
                             format!("Trusting {:?}", instruction.op0_register()),
                         );
 
-                        match instruction.op1_kind() {
-                            OpKind::Register => {
-                                Analyzer::debug(
-                                    icall_ip,
-                                    format!("Trusting {:?}", instruction.op1_register()),
-                                );
-                                call_path
-                                    .trusted_registers
-                                    .insert(instruction.op1_register());
-                            }
-                            _ => (),
-                        }
+                        // match instruction.op1_kind() {
+                        //     OpKind::Register => {
+                        //         Analyzer::debug(
+                        //             icall_ip,
+                        //             format!("Trusting {:?}", instruction.op1_register()),
+                        //         );
+                        //         call_path
+                        //             .trusted_registers
+                        //             .insert(instruction.op1_register());
+                        //     }
+                        //     _ => (),
+                        // }
                         continue;
                     }
 
