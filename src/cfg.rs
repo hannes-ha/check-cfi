@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashSet, VecDeque},
-    error::Error,
-};
+use std::collections::{HashSet, VecDeque};
 
 use iced_x86::{FlowControl, Instruction, Mnemonic, OpKind, Register};
 use petgraph::graphmap::DiGraphMap;
