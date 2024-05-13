@@ -1,0 +1,45 @@
+diff --git a/.gitignore b/.gitignore
+index 61fa39967b..3cefefc26e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,5 +1,8 @@
+ /GNUmakefile
+ /build/
++/build-cfi/
++/build-cfi-no-debug/
++/build-no-cfi/
+ /.cache/
+ /.vscode/
+ *.pyc
+diff --git a/include/hw/xen/xen_backend_ops.h b/include/hw/xen/xen_backend_ops.h
+index 90cca85f52..c21b9067e1 100644
+--- a/include/hw/xen/xen_backend_ops.h
++++ b/include/hw/xen/xen_backend_ops.h
+@@ -15,6 +15,7 @@
+ #include "hw/xen/xen.h"
+ #include "hw/xen/interface/xen.h"
+ #include "hw/xen/interface/io/xenbus.h"
++#include "qemu/thread.h"
+ 
+ /*
+  * For the time being, these operations map fairly closely to the API of
+@@ -336,6 +337,7 @@ static inline void *qemu_xen_xs_read(struct qemu_xs_handle *h,
+     return xen_xenstore_ops->read(h, t, path, len);
+ }
+ 
++QEMU_DISABLE_CFI
+ static inline bool qemu_xen_xs_write(struct qemu_xs_handle *h,
+                                      xs_transaction_t t, const char *path,
+                                      const void *data, unsigned int len)
+diff --git a/system/globals.c b/system/globals.c
+index e353584201..33f79afe06 100644
+--- a/system/globals.c
++++ b/system/globals.c
+@@ -22,6 +22,7 @@
+  * THE SOFTWARE.
+  */
+ 
++#include "qemu/compiler.h"
+ #include "qemu/osdep.h"
+ #include "exec/cpu-common.h"
+ #include "hw/display/vga.h"
