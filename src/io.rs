@@ -2,7 +2,7 @@ use core::fmt;
 use std::{collections::HashMap, fs, io};
 
 use iced_x86::{Formatter, Instruction, IntelFormatter};
-use object::{Object, ObjectSection};
+use object::{Object, ObjectSection, ObjectSymbol};
 
 #[derive(Debug)]
 pub(crate) struct FileReadError {
@@ -53,10 +53,14 @@ pub fn read_file(path: &str) -> Result<(Vec<u8>, u64, HashMap<u64, String>), Fil
     let data = text_segment.data()?;
 
     let mut symbols = HashMap::<u64, String>::new();
-    for symbol in file.symbol_map().symbols() {
-        symbols.insert(symbol.address(), symbol.name().to_string());
+    for dyn_sym in file.symbols() {
+        match dyn_sym.name() {
+            Ok(name) => {
+                symbols.insert(dyn_sym.address(), name.to_string());
+            }
+            _ => {}
+        }
     }
-
     // return as vector
     Ok((Vec::from(data), adress, symbols))
 }
