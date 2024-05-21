@@ -1,0 +1,51 @@
+diff --git a/.gitignore b/.gitignore
+index 61fa39967b..7c15bae377 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -20,3 +20,13 @@ GTAGS
+ *.swp
+ *.patch
+ *.gcov
++
++build-cfi-no-debug/
++build-cfi/
++build-no-cfi/
++build-addr-san/
++build-mem-san/
++build-thread-san/
++compile_commands.json
++_codeql_detected_source_root
++build-codeql/
+diff --git a/include/hw/xen/xen_backend_ops.h b/include/hw/xen/xen_backend_ops.h
+index 90cca85f52..16026f53c2 100644
+--- a/include/hw/xen/xen_backend_ops.h
++++ b/include/hw/xen/xen_backend_ops.h
+@@ -335,7 +335,7 @@ static inline void *qemu_xen_xs_read(struct qemu_xs_handle *h,
+     }
+     return xen_xenstore_ops->read(h, t, path, len);
+ }
+-
++__attribute__((no_sanitize("cfi")))
+ static inline bool qemu_xen_xs_write(struct qemu_xs_handle *h,
+                                      xs_transaction_t t, const char *path,
+                                      const void *data, unsigned int len)
+@@ -343,7 +343,18 @@ static inline bool qemu_xen_xs_write(struct qemu_xs_handle *h,
+     if (!xen_xenstore_ops) {
+         return false;
+     }
+-    return xen_xenstore_ops->write(h, t, path, data, len);
++    asm volatile(
++        "jmp .global_DEBUG_LABEL_START_%=\n"
++        ".global_DEBUG_LABEL_START_%=:\n"
++        :
++    );
++    bool result = xen_xenstore_ops->write(h, t, path, data, len);
++    asm volatile(
++        "jmp .global_DEBUG_LABEL_END_%=\n"
++        ".global_DEBUG_LABEL_END_%=:\n"
++        :
++    );
++    return result;
+ }
+ 
+ static inline bool qemu_xen_xs_create(struct qemu_xs_handle *h,

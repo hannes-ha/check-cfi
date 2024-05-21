@@ -1,0 +1,44 @@
+diff --git a/.gitignore b/.gitignore
+index 61fa39967b..7c15bae377 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -20,3 +20,13 @@ GTAGS
+ *.swp
+ *.patch
+ *.gcov
++
++build-cfi-no-debug/
++build-cfi/
++build-no-cfi/
++build-addr-san/
++build-mem-san/
++build-thread-san/
++compile_commands.json
++_codeql_detected_source_root
++build-codeql/
+diff --git a/hw/core/irq.c b/hw/core/irq.c
+index 3f14e2dda7..184839279a 100644
+--- a/hw/core/irq.c
++++ b/hw/core/irq.c
+@@ -36,12 +36,21 @@ struct IRQState {
+     int n;
+ };
+ 
++__attribute__((no_sanitize("cfi")))
+ void qemu_set_irq(qemu_irq irq, int level)
+ {
+     if (!irq)
+         return;
+ 
++    asm volatile(
++        ".global_DEBUG_LABEL_START_%=:\n"
++        :
++    );
+     irq->handler(irq->opaque, irq->n, level);
++    asm volatile(
++        ".global_DEBUG_LABEL_END_%=:\n"
++        :
++    );
+ }
+ 
+ qemu_irq *qemu_extend_irqs(qemu_irq *old, int n_old, qemu_irq_handler handler,

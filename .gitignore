@@ -17,4 +17,4 @@ Cargo.lock
 # vc
 .vscode/
 
-test/qemu/*/qemu-system-x86_64
+test/**/qemu-system-x86_64
