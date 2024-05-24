@@ -92,7 +92,7 @@ pub fn print_instruction(
 pub fn print_results(
     checked: &Vec<Instruction>,
     unchecked: &Vec<(Instruction, String)>,
-    print_checked: bool, 
+    print_checked: bool,
     print_unchecked: bool,
     format: &Option<String>,
     symbol_map: &HashMap<u64, String>,
@@ -125,8 +125,8 @@ pub fn print_results(
         }
     }
 
-        if print_checked {
-            println!("---Checked:---");
+    if print_checked {
+        println!("---Checked:---");
         for instr in checked {
             let symbol = match symbol_map.get(&instr.ip()) {
                 Some(str) => str.to_string(),

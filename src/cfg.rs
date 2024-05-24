@@ -76,8 +76,6 @@ impl Cfg {
                 && !is_stack_relative(&instruction, 0)
                 && !is_stack_relative(&instruction, 1)
             {
-                Analyzer::debug(icall_ip, "found cmp".to_string());
-
                 let mut stack = analyzer.get_children(call_path.entrypoint)?;
                 let mut visited = HashSet::new();
                 while let Some(cmp_child) = stack.pop() {
@@ -88,24 +86,6 @@ impl Cfg {
                             .trusted_registers
                             .insert(instruction.op0_register());
                         call_path.compare_ip = instruction.ip();
-
-                        Analyzer::debug(
-                            icall_ip,
-                            format!("Trusting {:?}", instruction.op0_register()),
-                        );
-
-                        // match instruction.op1_kind() {
-                        //     OpKind::Register => {
-                        //         Analyzer::debug(
-                        //             icall_ip,
-                        //             format!("Trusting {:?}", instruction.op1_register()),
-                        //         );
-                        //         call_path
-                        //             .trusted_registers
-                        //             .insert(instruction.op1_register());
-                        //     }
-                        //     _ => (),
-                        // }
                         continue;
                     }
 
@@ -137,14 +117,12 @@ impl Cfg {
                     call_path
                         .trusted_registers
                         .insert(instruction.op1_register());
-                    Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
 
                     if instruction.op1_kind() == OpKind::Register {
                         call_path
                             .trusted_registers
                             .remove(&instruction.op0_register());
                     }
-                    Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
                 }
             }
 
@@ -155,7 +133,6 @@ impl Cfg {
                     //     .trusted_registers
                     //     .insert(instruction.op0_register());
                     call_path.load_ip = instruction.ip();
-                    Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
                 }
             }
 
@@ -180,8 +157,6 @@ impl Cfg {
                 // else just add edge
                 graph.add_edge(parent_ip, call_path.entrypoint, ());
             }
-
-            Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
         }
 
         Ok(Self {
@@ -206,12 +181,9 @@ impl Cfg {
     ) -> Result<(), String> {
         let mut stack = vec![(entry_point, trusted_registers)];
         let mut visited = Vec::<(u64, HashSet<Register>)>::new();
-
-        // when the icall is reached, check wether the call register is trusted
         while let Some((current_node, mut local_trusted)) = stack.pop() {
             visited.push((current_node, local_trusted.clone()));
             if current_node == self.target_icall.ip() {
-                Analyzer::debug(self.target_icall.ip(), format!("{:?}", local_trusted));
                 match local_trusted.contains(&get_register_or_mem_base(&self.target_icall, 0)) {
                     true => continue,
                     false => {
@@ -251,10 +223,6 @@ impl Cfg {
             if instruction.mnemonic() == Mnemonic::Lea
                 && is_load_from_jmp_table(&analyzer, instruction)
             {
-                Analyzer::debug(
-                    self.target_icall.ip(),
-                    format!("found load from jmp table at 0x{:x}", instruction.ip()),
-                );
                 if !is_stack_relative(&instruction, 0) {
                     local_trusted.insert(instruction.op0_register());
                 }

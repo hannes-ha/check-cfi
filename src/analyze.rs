@@ -7,8 +7,6 @@ use iced_x86::{
 
 use crate::{cfg::Cfg, io};
 
-const DEBUGGING_IP: u64 = 0xb4d02c;
-
 #[allow(dead_code)]
 pub struct Analyzer {
     backtrack_limit: Option<usize>,
@@ -42,12 +40,6 @@ impl Analyzer {
     pub fn get_instruction_info(&self, ip: u64) -> Result<InstructionInfo, String> {
         let instruction = self.get_instruction(ip)?;
         Ok(InstructionInfoFactory::new().info(&instruction).clone())
-    }
-
-    pub fn debug(ip: u64, msg: String) {
-        if ip == DEBUGGING_IP {
-            eprintln!("{}", msg)
-        }
     }
 
     pub fn above_backtrack_limit(&self, value: usize) -> bool {
@@ -181,15 +173,9 @@ impl Analyzer {
         for icall in self.icalls.iter() {
             match self.is_cfi_checked(icall) {
                 Ok(_) => {
-                    Self::debug(icall.ip(), "Trusted".to_string());
-                    self.safe_calls
-                        .insert(icall.ip(), get_register_or_mem_base(icall, 0));
                     self.checked.push(icall.clone()); // TODO: remove
                 }
-                Err(msg) => {
-                    Self::debug(icall.ip(), format!("NOT trusted: {}", msg));
-                    self.unchecked.push((icall.clone(), msg.to_string()))
-                }
+                Err(msg) => self.unchecked.push((icall.clone(), msg.to_string())),
             };
             progress.inc(1);
         }
@@ -215,32 +201,6 @@ impl Analyzer {
                 cfg.graph.node_count()
             )
         }
-        if icall.ip() == DEBUGGING_IP {
-            eprintln!(
-                "edges:\n{}",
-                cfg.graph
-                    .all_edges()
-                    .map(|e| {
-                        let (from, to, _) = e;
-                        return format!(
-                            "0x{:x} -> 0x{:x}. Instruction: {:?}",
-                            from,
-                            to,
-                            self.get_instruction(from).unwrap().mnemonic()
-                        );
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
-            eprintln!(
-                "entry: {:?}",
-                cfg.call_paths
-                    .iter()
-                    .map(|cp| format!("0x{:x}", cp.entrypoint))
-                    .collect::<Vec<_>>()
-            );
-        }
-
         // if no entrypoints, fail.
         if cfg.call_paths.len() == 0 {
             return Err("No entrypoints found".to_string());
