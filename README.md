@@ -1,6 +1,6 @@
 # check-cfi
 
-A simple tool to check if a binary is compiled with Clang's control flow integrity enabled, i.e if the binary was compiled with the ´-fsanitize=cfi´ option. 
+A simple tool to check if a binary is compiled with Clang's control flow integrity enabled, i.e if the binary was compiled with the `-fsanitize=cfi` option. 
 
 The tool iterates all indirect calls, i.e. `call %rax` and checks that santiziation of the call target is applied before the call. 
 
@@ -8,7 +8,7 @@ The tool iterates all indirect calls, i.e. `call %rax` and checks that santiziat
 ## Building 
 
 - Install [Rust](https://www.rust-lang.org/tools/install)
-- Build `cargo build --release`
+- Build with `cargo build --release`
 - The executable will be available at `/target/release/check-cfi`
 
 ## Examples
