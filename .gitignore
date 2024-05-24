@@ -17,3 +17,8 @@ output/
 # vc
 .vscode/
 
+# examples
+examples/half_indirect
+examples/indirect
+examples/vcall
+examples/single_indirect
