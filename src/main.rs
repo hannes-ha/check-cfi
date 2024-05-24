@@ -8,34 +8,58 @@ mod io;
 #[derive(Parser)]
 #[command(name = "check-cfi")]
 #[command(version = "0.1")]
-struct Cli {
+struct Args {
     #[arg(help = "Path(s) to binary file")]
     files: Vec<String>,
 
     #[arg(short, long)]
     verbose: bool,
 
-    #[arg(short, long)]
+    #[arg(short, long, help = "Output unchecked instructions")]
+    unchecked: bool,
+
+    #[arg(
+        short = 'j',
+        long,
+        help = "Include indirect jumps in analysis [experimental]"
+    )]
+    enable_jumps: bool,
+
+    #[arg(short, long, help = "Output checked instructions")]
+    checked: bool,
+
+    #[arg(
+        short,
+        long,
+        help = "Limit the number of instructions visited during backtracking"
+    )]
     backtrack_limit: Option<usize>,
 
-    #[arg(short, long)]
+    #[arg(short, long, help = "Specify output format: normal or csv")]
     format: Option<String>,
 }
 
 fn main() {
-    let cli = Cli::parse();
-    let file_paths = cli.files;
+    let args = Args::parse();
+    let file_paths = args.files;
 
     for path in &file_paths {
-        eprintln!("Checking file: {}", path);
+        eprintln!("File: {}", path);
 
         match io::read_file(&path) {
             Ok((file_content, offset, mut symbols)) => {
-                let mut analyzer = Analyzer::new(cli.backtrack_limit);
+                let mut analyzer = Analyzer::new(args.backtrack_limit);
                 analyzer.disassemble(&file_content, offset, &mut symbols);
                 analyzer.analyze();
-                let (checked, unchecked) = analyzer.get_results();
-                io::print_results(checked, unchecked, &cli.verbose, &cli.format, &symbols);
+                let (instr_checked, instr_unchecked) = analyzer.get_results();
+                io::print_results(
+                    instr_checked,
+                    instr_unchecked,
+                    args.checked,
+                    args.unchecked,
+                    &args.format,
+                    &symbols,
+                );
             }
             Err(e) => {
                 eprintln!("Could not read file: {}\n", e);
