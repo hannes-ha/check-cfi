@@ -12,6 +12,7 @@ const DEBUGGING_IP: u64 = 0xb4d02c;
 #[allow(dead_code)]
 pub struct Analyzer {
     backtrack_limit: Option<usize>,
+    enable_jumps: bool,
     instructions: Vec<Instruction>,
     icalls: Vec<Instruction>,
     address_map: HashMap<u64, usize>,
@@ -23,9 +24,10 @@ pub struct Analyzer {
 }
 
 impl Analyzer {
-    pub fn new(backtrack_limit: Option<usize>) -> Self {
+    pub fn new(backtrack_limit: Option<usize>, enable_jumps: bool) -> Self {
         Analyzer {
             backtrack_limit,
+            enable_jumps,
             instructions: Vec::new(),
             icalls: Vec::new(),
             address_map: HashMap::new(),
@@ -133,7 +135,7 @@ impl Analyzer {
             let flow_control = instruction.flow_control();
 
             if flow_control == FlowControl::IndirectCall
-            // || flow_control == FlowControl::IndirectBranch
+                || (self.enable_jumps && flow_control == FlowControl::IndirectBranch)
             {
                 self.icalls.push(instruction);
                 symbol_map.insert(instruction.ip(), current_symbol.clone());
