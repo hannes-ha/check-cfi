@@ -50,6 +50,13 @@ impl Analyzer {
         }
     }
 
+    pub fn above_backtrack_limit(&self, value: usize) -> bool {
+        match self.backtrack_limit {
+            Some(limit) => value > limit,
+            None => false,
+        }
+    }
+
     pub fn get_jumps_to(&self, ip: u64) -> Vec<Instruction> {
         match self.jump_map.get(&ip) {
             Some(instructions) => instructions.to_vec(),

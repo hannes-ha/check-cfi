@@ -41,6 +41,7 @@ impl Cfg {
         let mut call_paths = Vec::<CallPath>::new();
         let icall_ip = target_icall.ip();
         let icall_target = get_register_or_mem_base(&target_icall, 0);
+        let mut visited_count: usize = 0;
 
         graph.add_node(icall_ip);
 
@@ -52,6 +53,10 @@ impl Cfg {
             let Some(mut call_path) = queue.pop_front() else {
                 break;
             };
+            visited_count += 1;
+            if analyzer.above_backtrack_limit(visited_count) {
+                break;
+            }
 
             let instruction = analyzer.get_instruction(call_path.entrypoint)?;
             let mnemonic = instruction.mnemonic();
