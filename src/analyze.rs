@@ -194,13 +194,6 @@ impl Analyzer {
 
         let cfg = Cfg::new(*icall, self)?;
 
-        if cfg.graph.node_count() > 1500 {
-            eprintln!(
-                "0x{:x} has high node count {}",
-                icall.ip(),
-                cfg.graph.node_count()
-            )
-        }
         // if no entrypoints, fail.
         if cfg.call_paths.len() == 0 {
             return Err("No entrypoints found".to_string());
