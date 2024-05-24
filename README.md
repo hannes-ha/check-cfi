@@ -2,7 +2,7 @@
 
 A simple tool to check if a binary is compiled with Clang's control flow integrity enabled, i.e if the binary was compiled with the `-fsanitize=cfi` option. 
 
-The tool iterates all indirect calls, i.e. `call %rax` and checks that santiziation of the call target is applied before the call. 
+The tool iterates all indirect calls, i.e. `call %rax` and checks that sanitization of the call target is applied before the call. 
 
 
 ## Building 
