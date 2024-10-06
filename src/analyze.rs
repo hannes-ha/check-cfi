@@ -11,7 +11,7 @@ use crate::cfg::Cfg;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
-const DEBUGGING_IP: u64 = 0x601ced;
+const DEBUGGING_IP: u64 = 0x64918c;
 const BACKTRACK_LIMIT: usize = 200;
 
 #[allow(dead_code)]
@@ -159,10 +159,9 @@ impl Analyzer {
     }
 
     fn is_cfi_checked_3(&self, icall: &Instruction) -> Result<(), String> {
-        let icall_target = get_register_or_mem_base(icall, 0);
         let cfg = self.generate_cfg(icall.ip())?;
 
-        if cfg.fwd_graph.node_count() > 500 {
+        if cfg.fwd_graph.node_count() > 1500 {
             eprintln!(
                 "0x{:x} has high node count {}",
                 icall.ip(),
@@ -185,7 +184,7 @@ impl Analyzer {
                 "entry: {:?}",
                 cfg.entrypoints
                     .iter()
-                    .map(|e| format!("0x{:x}", e))
+                    .map(|(e, _, _)| format!("0x{:x}", e))
                     .collect::<Vec<_>>()
             );
         }
@@ -209,7 +208,7 @@ impl Analyzer {
             return Err("Compare not found".to_string());
         }
 
-        cfg.assert_register_untouched(self, icall.ip(), icall_target)?;
+        cfg.assert_icall_to_trusted_register(&self)?;
 
         // assert that the called register is not touched between the compare and the call
 
@@ -217,20 +216,20 @@ impl Analyzer {
     }
 
     pub fn generate_cfg(&self, ip: u64) -> Result<Cfg, String> {
-        let mut cfg = Cfg::new();
+        let icall_instruction = self.get_instruction(ip)?;
+        let mut cfg = Cfg::new(icall_instruction.clone());
 
         // insert the icall
-        let icall_instruction = self.get_instruction(ip)?;
         let icall_target = get_register_or_mem_base(&icall_instruction, 0);
 
         cfg.add_node(ip);
 
         // track set of trusted registers to limit search backwards
-        let mut queue = VecDeque::<(u64, HashSet<Register>)>::new();
-        queue.push_back((ip, HashSet::default()));
+        let mut queue = VecDeque::<(u64, HashSet<Register>, u64)>::new();
+        queue.push_back((ip, HashSet::default(), 0));
 
         while !queue.is_empty() {
-            let Some((node_ip, mut trusted_registers)) = queue.pop_front() else {
+            let Some((node_ip, mut trusted_registers, mut cmp_ip)) = queue.pop_front() else {
                 break;
             };
 
@@ -240,24 +239,25 @@ impl Analyzer {
 
             // Stop at function border
             if self.function_borders.contains(&instruction.ip()) {
-                cfg.entrypoints.push(node_ip); // should this really be an entrypoint?????
+                cfg.entrypoints.push((node_ip, trusted_registers, cmp_ip));
                 continue;
             }
 
             // safe registers may come from two sources,
             // either through a compare and jump to a ud1
-            if mnemonic == Mnemonic::Cmp && !cfg.cmp_found() {
+            if mnemonic == Mnemonic::Cmp {
                 Analyzer::debug(icall_instruction.ip(), "found cmp".to_string());
                 // check the cfg if this cmp leads to a ud1
                 let mut bfs = Bfs::new(&cfg.fwd_graph, node_ip);
 
-                // TODO: Go deeper.
+                // TODO: Go deeper. Stop ad ud1 and any branching?
                 while let Some(ip) = bfs.next(&cfg.fwd_graph) {
                     let cmp_child = self.get_instruction(ip)?;
                     if cmp_child.mnemonic() == Mnemonic::Ud1 {
                         // the registers involved in the compare are now considered trusted
                         trusted_registers.insert(instruction.op0_register());
-                        cfg.set_cmp_ip(instruction.ip());
+                        // cfg.set_cmp_ip(instruction.ip());
+                        cmp_ip = instruction.ip();
                         if icall_instruction.ip() == DEBUGGING_IP {
                             eprintln!("Trusting {:?}", instruction.op0_register());
                         }
@@ -283,7 +283,8 @@ impl Analyzer {
                         // check if the branch target is a ud1
                         // TODO fix duplication
                         if branch_target.mnemonic() == Mnemonic::Ud1 {
-                            cfg.set_cmp_ip(instruction.ip());
+                            // cfg.set_cmp_ip(instruction.ip());
+                            cmp_ip = instruction.ip();
                             trusted_registers.insert(instruction.op0_register());
                             if icall_instruction.ip() == DEBUGGING_IP {
                                 eprintln!("Trusting {:?}", instruction.op0_register());
@@ -326,7 +327,7 @@ impl Analyzer {
 
             // if the call register is trusted, we can stop looking at this leg
             if trusted_registers.contains(&icall_target) {
-                cfg.entrypoints.push(node_ip);
+                cfg.entrypoints.push((node_ip, trusted_registers, cmp_ip));
                 continue;
             }
 
@@ -349,7 +350,7 @@ impl Analyzer {
                 if !cfg.contains_node(parent_ip) {
                     cfg.add_node(parent_ip);
                     // we dont need to visit parents more than once
-                    queue.push_back((parent_ip, trusted_registers.clone()));
+                    queue.push_back((parent_ip, trusted_registers.clone(), cmp_ip));
                 }
                 // else just add edge
                 cfg.add_edge(parent_ip, node_ip);
