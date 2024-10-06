@@ -9,6 +9,7 @@ use indicatif::ProgressStyle;
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
 const DEBUGGING_IP: u64 = 0x5fc36e;
+const BACKTRACK_LIMIT: usize = 200;
 
 /*
             idea:
@@ -144,6 +145,9 @@ impl Analyzer {
         // we want to indentify the ud1 or jump to ud1, and from that determine what registers are
         // trusted. Any register involved in a `cmp jmp ud1` sequence is considered trusted
         while predecessor_index > 0 {
+            if (icall_index - predecessor_index) > BACKTRACK_LIMIT {
+                return Err("Backtrack limit reached.".to_string());
+            }
             if icall.ip() == DEBUGGING_IP {
                 eprintln!("Checking predecessor at index {}", predecessor_index);
             }
