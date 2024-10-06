@@ -1,0 +1,50 @@
+diff --git a/.gitignore b/.gitignore
+index 61fa39967b..7c15bae377 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -20,3 +20,13 @@ GTAGS
+ *.swp
+ *.patch
+ *.gcov
++
++build-cfi-no-debug/
++build-cfi/
++build-no-cfi/
++build-addr-san/
++build-mem-san/
++build-thread-san/
++compile_commands.json
++_codeql_detected_source_root
++build-codeql/
+diff --git a/chardev/char.c b/chardev/char.c
+index 3c43fb1278..4479d165b5 100644
+--- a/chardev/char.c
++++ b/chardev/char.c
+@@ -62,6 +62,7 @@ static void chr_be_event(Chardev *s, QEMUChrEvent event)
+     be->chr_event(be->opaque, event);
+ }
+ 
++__attribute__((no_sanitize("cfi")))
+ void qemu_chr_be_event(Chardev *s, QEMUChrEvent event)
+ {
+     /* Keep track if the char device is open */
+@@ -78,8 +79,18 @@ void qemu_chr_be_event(Chardev *s, QEMUChrEvent event)
+         /* Ignore */
+         break;
+     }
++    ChardevClass * tmp = CHARDEV_GET_CLASS(s);
++    asm volatile(
++        ".global_DEBUG_LABEL_START_%=:\n"
++        :
++    );
++    tmp->chr_be_event(s, event);
++
++    asm volatile(
++        ".global_DEBUG_LABEL_END_%=:\n"
++        :
++    );
+ 
+-    CHARDEV_GET_CLASS(s)->chr_be_event(s, event);
+ }
+ 
+ /* Not reporting errors from writing to logfile, as logs are
