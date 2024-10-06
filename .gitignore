@@ -18,3 +18,5 @@ Cargo.lock
 
 *.out
 *.txt
+
+test/qemu
