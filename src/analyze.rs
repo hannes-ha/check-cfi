@@ -7,7 +7,7 @@ use iced_x86::{
 
 use crate::{cfg::Cfg, io};
 
-const DEBUGGING_IP: u64 = 0xb9db65;
+const DEBUGGING_IP: u64 = 0xb4d02c;
 
 #[allow(dead_code)]
 pub struct Analyzer {
@@ -260,7 +260,7 @@ impl Analyzer {
             FlowControl::Call
             | FlowControl::Next
             | FlowControl::ConditionalBranch
-            | FlowControl::Return // we want to discover function borders in the cfg, so keep returns as
+             // | FlowControl::Return // we want to discover function borders in the cfg, so keep returns as
                 // a parent for now
             | FlowControl::IndirectCall => jump_prevs.push(chronological_prev),
             _ => (),

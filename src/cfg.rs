@@ -58,7 +58,7 @@ impl Cfg {
 
             // Stop at function border
             if analyzer.is_function_border(&call_path.entrypoint)
-                || instruction.flow_control() == FlowControl::Return
+                // || instruction.flow_control() == FlowControl::Return
                 || (instruction.mnemonic() == Mnemonic::Push
                     && instruction.op0_register() == Register::RBP)
             {
@@ -132,24 +132,27 @@ impl Cfg {
                     call_path
                         .trusted_registers
                         .insert(instruction.op1_register());
+                    Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
 
                     if instruction.op1_kind() == OpKind::Register {
                         call_path
                             .trusted_registers
                             .remove(&instruction.op0_register());
                     }
+                    Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
                 }
             }
 
             // LEA from jump table considered trusted
-            // if mnemonic == Mnemonic::Lea {
-            //     if is_load_from_jmp_table(&analyzer, instruction) {
-            //         call_path
-            //             .trusted_registers
-            //             .insert(instruction.op0_register());
-            //         call_path.load_ip = instruction.ip();
-            //     }
-            // }
+            if mnemonic == Mnemonic::Lea {
+                if is_load_from_jmp_table(&analyzer, instruction) {
+                    // call_path
+                    //     .trusted_registers
+                    //     .insert(instruction.op0_register());
+                    call_path.load_ip = instruction.ip();
+                    Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
+                }
+            }
 
             let parents = analyzer.get_parents(call_path.entrypoint)?;
 
@@ -172,6 +175,8 @@ impl Cfg {
                 // else just add edge
                 graph.add_edge(parent_ip, call_path.entrypoint, ());
             }
+
+            Analyzer::debug(icall_ip, format!("{:?}", call_path.trusted_registers));
         }
 
         Ok(Self {
@@ -195,12 +200,13 @@ impl Cfg {
         trusted_registers: HashSet<Register>,
     ) -> Result<(), String> {
         let mut stack = vec![(entry_point, trusted_registers)];
-        let mut visited = HashSet::<u64>::new();
+        let mut visited = Vec::<(u64, HashSet<Register>)>::new();
 
         // when the icall is reached, check wether the call register is trusted
         while let Some((current_node, mut local_trusted)) = stack.pop() {
-            visited.insert(current_node);
+            visited.push((current_node, local_trusted.clone()));
             if current_node == self.target_icall.ip() {
+                Analyzer::debug(self.target_icall.ip(), format!("{:?}", local_trusted));
                 match local_trusted.contains(&get_register_or_mem_base(&self.target_icall, 0)) {
                     true => continue,
                     false => {
@@ -223,7 +229,8 @@ impl Cfg {
             // if all read registers are safe, add written registers to trusted.
             // except the stack relative wich may never be trusted
             // otherwise remove all from trusted
-            if read_registers.iter().all(|r| local_trusted.contains(&r)) {
+            if read_registers.len() > 0 && read_registers.iter().all(|r| local_trusted.contains(&r))
+            {
                 written_registers.iter().for_each(|&w_r| {
                     if w_r != Register::RSP {
                         local_trusted.insert(w_r);
@@ -236,18 +243,18 @@ impl Cfg {
             }
 
             let instruction = analyzer.get_instruction(current_node)?;
-            // if instruction.mnemonic() == Mnemonic::Lea
-            //     && is_load_from_jmp_table(&analyzer, instruction)
-            // {
-            //     Analyzer::debug(
-            //         self.target_icall.ip(),
-            //         format!("found load from jmp table at 0x{:x}", instruction.ip()),
-            //     );
-            //     if !is_stack_relative(&instruction, 0) {
-            //         local_trusted.insert(instruction.op0_register());
-            //     }
-            // }
-            //
+            if instruction.mnemonic() == Mnemonic::Lea
+                && is_load_from_jmp_table(&analyzer, instruction)
+            {
+                Analyzer::debug(
+                    self.target_icall.ip(),
+                    format!("found load from jmp table at 0x{:x}", instruction.ip()),
+                );
+                if !is_stack_relative(&instruction, 0) {
+                    local_trusted.insert(instruction.op0_register());
+                }
+            }
+
             // if we pass a call, untrust everything that is not callee-saved
             if instruction.mnemonic() == Mnemonic::Call {
                 let current_trusted = local_trusted.clone();
@@ -258,16 +265,15 @@ impl Cfg {
                 })
             }
 
-            // TODO: paths leading to the same node but with different states are discarded
+            // ignore neighbors ive already visited, in this state of trusted registers
             self.graph.neighbors(current_node).for_each(|nb| {
-                if !visited.contains(&nb) {
+                if !visited.contains(&(nb, local_trusted.clone())) {
                     stack.push((nb, local_trusted.clone()));
                 }
             })
         }
 
-        // all fine!
-        Ok(())
+        return Ok(());
     }
 
     // visits the graph from the entrypoints and asserts that a given register is not written to
@@ -283,7 +289,6 @@ impl Cfg {
 
 // Handle edge case where LEA reg [read-only] -> call reg
 // Not really an indirect call
-#[allow(unused)]
 fn is_load_from_jmp_table(analyzer: &Analyzer, lea_instruction: Instruction) -> bool {
     let lea_target = lea_instruction.memory_displacement64();
     // this indirectly checks that the load is from within .text segment
