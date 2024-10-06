@@ -48,7 +48,7 @@ fn main() {
 
         match io::read_file(&path) {
             Ok((file_content, offset, mut symbols)) => {
-                let mut analyzer = Analyzer::new(args.backtrack_limit);
+                let mut analyzer = Analyzer::new(args.backtrack_limit, args.enable_jumps);
                 analyzer.disassemble(&file_content, offset, &mut symbols);
                 analyzer.analyze();
                 let (instr_checked, instr_unchecked) = analyzer.get_results();
