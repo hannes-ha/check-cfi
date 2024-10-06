@@ -2,6 +2,7 @@ use analyze::Analyzer;
 use clap::Parser;
 
 mod analyze;
+mod cfg;
 mod io;
 
 #[derive(Parser)]
@@ -29,7 +30,7 @@ fn main() {
             Ok((file_content, offset)) => {
                 let mut analyzer = Analyzer::new();
                 analyzer.disassemble(&file_content, offset);
-                analyzer.analyze_fwd();
+                analyzer.analyze();
                 let (checked, unchecked) = analyzer.get_results();
                 io::print_results(checked, unchecked, cli.verbose);
             }

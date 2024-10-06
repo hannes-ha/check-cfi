@@ -8,7 +8,7 @@ use indicatif::ProgressStyle;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
-const DEBUGGING_IP: u64 = 0x5fc36e;
+const DEBUGGING_IP: u64 = 0x5fb011;
 const BACKTRACK_LIMIT: usize = 200;
 
 /*
@@ -34,6 +34,7 @@ pub struct Analyzer {
     instructions: Vec<Instruction>,
     icalls: Vec<Instruction>,
     address_map: HashMap<u64, usize>,
+    jump_map: HashMap<u64, Vec<Instruction>>,
     checked: Vec<Instruction>,
     unchecked: Vec<(Instruction, String)>,
     info_factory: InstructionInfoFactory,
@@ -45,11 +46,39 @@ impl Analyzer {
             instructions: Vec::new(),
             icalls: Vec::new(),
             address_map: HashMap::new(),
+            jump_map: HashMap::new(),
             checked: Vec::new(),
             unchecked: Vec::new(),
             info_factory: InstructionInfoFactory::new(),
         }
     }
+
+    pub fn get_jumps_to(&self, ip: u64) -> Vec<Instruction> {
+        match self.jump_map.get(&ip) {
+            Some(instructions) => instructions.to_vec(),
+            None => Vec::<Instruction>::default(),
+        }
+    }
+
+    pub fn get_instruction_index(&self, ip: u64) -> Result<usize, String> {
+        match self.address_map.get(&ip) {
+            Some(&index) => Ok(index),
+            None => Err(format!("Instruction at 0x{:x} not found", ip)),
+        }
+    }
+
+    pub fn get_instruction_from_index(&self, index: usize) -> Result<Instruction, String> {
+        match self.instructions.get(index) {
+            Some(&instruction) => Ok(instruction),
+            None => Err(format!("Instruction at index {} not found", index)),
+        }
+    }
+
+    pub fn get_instruction(&self, ip: u64) -> Result<Instruction, String> {
+        let index = self.get_instruction_index(ip)?;
+        self.get_instruction_from_index(index)
+    }
+
     pub fn disassemble(&mut self, code: &[u8], offset: u64) {
         let mut decoder = Decoder::new(64, code, DecoderOptions::NONE);
         decoder.set_ip(offset);
@@ -68,6 +97,7 @@ impl Analyzer {
 
             let flow_control = instruction.flow_control();
 
+            // collect icalls
             if
             /*flow_control == FlowControl::IndirectBranch*/
             flow_control == FlowControl::IndirectCall {
@@ -75,6 +105,18 @@ impl Analyzer {
                     self.icalls.push(instruction);
                 }
             }
+
+            // track close jumps to be able to construct cfg later
+            if instruction.is_jmp_short_or_near() || instruction.is_jcc_short_or_near() {
+                // jump target is map key
+                let jump_target = instruction.near_branch_target();
+                // we only care about near branches
+                if jump_target > 0 {
+                    let prev_targets = self.jump_map.entry(jump_target).or_insert(Vec::new());
+                    prev_targets.push(instruction);
+                }
+            }
+
             i += 1;
             progress.inc(instruction.len() as u64);
         }
@@ -82,8 +124,7 @@ impl Analyzer {
         progress.finish();
     }
 
-    #[allow(unused)]
-    pub fn analyze_bckwd(&mut self) {
+    pub fn analyze(&mut self) {
         let progress = indicatif::ProgressBar::new(self.icalls.len() as u64);
         progress.set_style(
             ProgressStyle::with_template("Analyzing:     [{bar} {percent}%]")
@@ -92,30 +133,7 @@ impl Analyzer {
         );
 
         for icall in self.icalls.iter() {
-            match self.is_cfi_checked(icall) {
-                Ok(_) => self.checked.push(icall.clone()),
-                Err(msg) => self.unchecked.push((icall.clone(), String::from(msg))),
-            }
-            progress.inc(1);
-        }
-        progress.finish();
-    }
-
-    // new strat
-    // find jump to ud1
-    // mark registers involved in us ending up in ud1 as safe
-    // keep track of safe registers
-    // when call, check if called register are safe
-    pub fn analyze_fwd(&mut self) {
-        let progress = indicatif::ProgressBar::new(self.icalls.len() as u64);
-        progress.set_style(
-            ProgressStyle::with_template("Analyzing:     [{bar} {percent}%]")
-                .unwrap()
-                .progress_chars("=>-"),
-        );
-
-        for icall in self.icalls.iter() {
-            match self.is_cfi_checked_2(icall) {
+            match self.is_cfi_checked_3(icall) {
                 Ok(_) => self.checked.push(icall.clone()),
                 Err(msg) => self.unchecked.push((icall.clone(), msg)),
             }
@@ -128,10 +146,59 @@ impl Analyzer {
         (&self.checked, &self.unchecked)
     }
 
+    fn is_cfi_checked_3(&self, icall: &Instruction) -> Result<(), String> {
+        let cfg = self.generate_cfg(icall.ip())?;
+
+        if cfg.fwd_graph.node_count() > 10000 {
+            eprintln!(
+                "0x{:x} has high node count {}",
+                icall.ip(),
+                cfg.fwd_graph.node_count()
+            )
+        }
+        if icall.ip() == DEBUGGING_IP {
+            eprintln!(
+                "edges:\n{}",
+                cfg.fwd_graph
+                    .all_edges()
+                    .map(|e| {
+                        let (from, to, _) = e;
+                        return format!("0x{:x} -> 0x{:x}", from, to);
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            eprintln!(
+                "entry: {:?}",
+                cfg.entrypoints
+                    .iter()
+                    .map(|e| format!("0x{:x}", e))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // we now iterate the graph from the entrypoint asserting 3 properties
+        // 1. the branch must pass through a ud1 or a cmp jcc ud1
+        // 2. the called register must be a trusted register
+        // 3. the called register may not be touched between the compare and the call
+        // find_compare(&graph, entrypoint) -> Instruction
+        // assert_is_trusted(&graph, icall, cmp_instruction) -> bool
+        // assert_untouched(&graph, cmp_instruction) -> bool
+        //
+        // running only ud1 check gives 191 "misses" wich is probably what to aim for.
+        for entrypoint in &cfg.entrypoints {
+            let _cmp_ip = cfg.find_compare(&self, *entrypoint)?;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     fn is_cfi_checked_2(&self, icall: &Instruction) -> Result<(), String> {
         let Some(icall_index) = self.address_map.get(&icall.ip()) else {
             return Err("Instruction not found in vector".to_string());
         };
+
+        // let cfg = cfg::generate_cfg();
 
         let mut predecessor_index = icall_index - 1;
 
@@ -176,18 +243,7 @@ impl Analyzer {
                         break;
                     }
                 }
-                // if we find a load into a safe register, stop looking.
-                // this should be the lea of the jump- or vtable
-                // Mnemonic::Lea => {
-                //     if instruction.op0_kind() == OpKind::Register
-                //         && trusted.contains(&instruction.op0_register())
-                //     {
-                //         if icall.ip() == DEBUGGING_IP {
-                //             eprintln!("Breaking on lea to trusted");
-                //         }
-                //         break;
-                //     }
-                // }
+
                 Mnemonic::Jae | Mnemonic::Ja | Mnemonic::Jne => {
                     if !ud1_found {
                         // look up the branch target in the address map
@@ -334,6 +390,7 @@ impl Analyzer {
         // at the point of the ud1 compare, we now have a set of trusted registers.
         // if these are now overwritten, we do not consider them trusted anymore
         // we start iterating from the place where we found the ud1
+        // now we must respect the CFG
 
         // TODO: CFG this
         for instruction in self.instructions.iter().skip(ud1_index) {
@@ -386,6 +443,13 @@ impl Analyzer {
         if trusted.contains(&call_target) {
             Ok(())
         } else {
+            if icall.ip() == DEBUGGING_IP {
+                eprintln!(
+                    "Call target not trusted. Looked at {} instructions. Trusted registers: {:?}",
+                    iterated_instructions, trusted
+                )
+            }
+
             Err(format!(
                 "Call target not trusted. Looked at {} instructions. Trusted registers: {:?}",
                 iterated_instructions, trusted
@@ -615,7 +679,7 @@ impl Analyzer {
     }
 }
 
-fn is_mem_op_matching(ins_a: &Instruction, ins_b: &Instruction) -> bool {
+pub fn is_mem_op_matching(ins_a: &Instruction, ins_b: &Instruction) -> bool {
     // check if the memory operand is the same
     return ins_a.memory_displacement64() == ins_b.memory_displacement64()
         && ins_a.memory_base() == ins_b.memory_base()
@@ -623,7 +687,7 @@ fn is_mem_op_matching(ins_a: &Instruction, ins_b: &Instruction) -> bool {
         && ins_a.memory_index_scale() == ins_b.memory_index_scale();
 }
 
-fn get_register_or_mem_base(instruction: &Instruction, position: u32) -> Register {
+pub fn get_register_or_mem_base(instruction: &Instruction, position: u32) -> Register {
     match instruction.op_kind(position) {
         OpKind::Register => instruction.op_register(position),
         OpKind::Memory => instruction.memory_base(),
