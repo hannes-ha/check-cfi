@@ -1,10 +1,12 @@
-use std::collections::{HashMap, VecDeque};
+use core::panic;
+use std::collections::HashMap;
 
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
 use indicatif::ProgressStyle;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
+const DEBUGGING_IP: u64 = 0x28d3089;
 
 /*
             idea:
@@ -31,7 +33,6 @@ pub struct Analyzer {
     address_map: HashMap<u64, usize>,
     checked: Vec<Instruction>,
     unchecked: Vec<Instruction>,
-    predecessors: VecDeque<Instruction>,
 }
 
 impl Analyzer {
@@ -42,7 +43,6 @@ impl Analyzer {
             address_map: HashMap::new(),
             checked: Vec::new(),
             unchecked: Vec::new(),
-            predecessors: VecDeque::new(),
         }
     }
     pub fn disassemble(&mut self, code: &[u8], offset: u64) {
@@ -51,7 +51,7 @@ impl Analyzer {
 
         let progress = indicatif::ProgressBar::new(code.len() as u64);
         progress.set_style(
-            ProgressStyle::with_template("Dissasembling: [{bar} {percent}%]")
+            ProgressStyle::with_template("Disassembling: [{bar} {percent}%]")
                 .unwrap()
                 .progress_chars("=>-"),
         );
@@ -81,10 +81,12 @@ impl Analyzer {
         );
 
         for icall in self.icalls.iter() {
-            if self.is_cfi_checked(icall).is_ok() {
-                self.checked.push(icall.clone());
-            } else {
-                self.unchecked.push(icall.clone());
+            match icall.op0_kind() {
+                OpKind::Register => match self.is_cfi_checked_reg(icall) {
+                    Ok(_) => self.checked.push(icall.clone()),
+                    _ => self.unchecked.push(icall.clone()),
+                },
+                _ => self.unchecked.push(icall.clone()),
             }
             progress.inc(1);
         }
@@ -95,7 +97,10 @@ impl Analyzer {
         (&self.checked, &self.unchecked)
     }
 
-    fn is_cfi_checked(&self, icall: &Instruction) -> Result<(), ()> {
+    fn is_cfi_checked_reg(&self, icall: &Instruction) -> Result<(), ()> {
+        if icall.op0_kind() != OpKind::Register {
+            panic!("Expected register as operand");
+        }
         // look up the instructions index in the vector
         let Some(instruction_index) = self.address_map.get(&icall.ip()) else {
             return Err(());
@@ -114,135 +119,141 @@ impl Analyzer {
             return Err(());
         };
 
-        // println!("Instruction: {}", icall);
-        // println!("icall register mnemonic: {:?}", icall.op0_register());
-
-        // println!("Predecessors instruction count: {}", predecessors.len());
-        // println!("Predecessors:");
-        // for instr in predecessors {
-        // println!("{}", instr);
-        // }
-
         // save the predecessors up until the value of the call target is loaded
         let relevant_instructions = predecessors
             .iter()
             .rev()
             .take_while(|instruction| {
-                // stop if we run in to another call and we are using RAX for our call
-                if instruction.mnemonic() == Mnemonic::Call && icall.op0_kind() == OpKind::Register && icall.op0_register() == Register::RAX {
-                    return false;
-                }
-                // stop where the call target is loaded
-                if instruction.mnemonic() == Mnemonic::Mov {
-                    match instruction.op0_kind() {
-                        OpKind::Register => {
-                            return instruction.op0_register() != icall.op0_register();
-                        }
-                        OpKind::Memory => {
-                            return instruction.memory_displacement64()
-                                != icall.memory_displacement64();
-                        }
-                        _ => return true,
+                match instruction.mnemonic() {
+                    // stop if we run in to another call and we are using RAX for our call
+                    Mnemonic::Call => return icall.op0_register() != Register::RAX,
+                    // stop where the call target is loaded
+                    Mnemonic::Mov => {
+                        return !(instruction.op0_kind() == OpKind::Register
+                            && instruction.op0_register() == icall.op0_register())
                     }
+                    _ => return true,
                 }
-                true
             })
             .collect::<Vec<_>>();
 
-        // println!(
-        // "Relevant instruction count: {}",
-        // relevant_instructions.len()
-        // );
+        if icall.ip() == DEBUGGING_IP {
+            println!(
+                "Relevant instruction count: {}",
+                relevant_instructions.len()
+            );
 
-        let mut test_passed = false;
-        let mut fail_branch_found = false;
-        let mut call_branch_found = false;
+            for instr in &relevant_instructions {
+                println!("{}", instr);
+            }
+        }
 
-        // println!();
-        // println!();
-        // println!();
+        // to consider this call as cfi-checked, we require the following:
+        // we must perform a compare
+        let mut cmp_found = false;
+
+        // immediately following, we should have a jump to a ud1 or the call
+        let mut ud1_jump_found = false;
+        let mut call_jump_found = false;
+
+        // if we have a jump to ud1, we know that we have a fallthrough to the call (since that is our icall instruction)
+        // otherwise, we must assert that we have a ud1 fallthrough
+        let mut ud1_fallthrough_found = false;
+
+        // order: looking for cmp -> looking for jump -> looking for fallthrough
+
         // we now iterate over the relevant instructions to find the two branches
+        // reverse to get back to original order
         relevant_instructions.iter().rev().for_each(|instruction| {
-            if instruction.mnemonic() == Mnemonic::Cmp || instruction.mnemonic() == Mnemonic::Test {
-                // handle multiple cmps?
-                test_passed = true;
+            // this may be made much stricter
+            if instruction.mnemonic() == Mnemonic::Cmp {
+                cmp_found = true;
             }
 
-            if test_passed {
-                // println!("Checking instruction: {}", instruction);
-                if is_jump(instruction) {
-                    // println!("JMP found");
-                    // println!("Branch target: {}", instruction.near_branch_target());
-                    // println!("icall target: {}", icall.ip());
-                    if instruction.near_branch_target() == icall.ip() {
-                        call_branch_found = true;
-                    } else {
-                        // println!("checking for ud1");
-                        // look up the branch target in the address map
-                        let Some(branch_target_index) =
-                            self.address_map.get(&instruction.near_branch_target())
-                        else {
-                            return;
-                        };
-
-                        // println!("Branch target index: {}", branch_target_index);
-
-                        // get the branch target instruction
-                        let Some(branch_target) = self.instructions.get(*branch_target_index)
-                        else {
-                            return;
-                        };
-
-                        //println!("Branch target instruction: {}", branch_target);
-
-                        // check if the branch target is a ud1
-                        if branch_target.mnemonic() == Mnemonic::Ud1 {
-                            fail_branch_found = true;
+            // compare found, look for jump immediately following
+            if cmp_found && !ud1_jump_found && !call_jump_found {
+                // if actual jump instruction is found, follow it
+                if instruction.is_jcc_short_or_near() {
+                    if icall.ip() == DEBUGGING_IP {
+                        println!("JMP found");
+                        println!("Branch target: {}", instruction.near_branch_target());
+                        println!("icall target: {}", icall.ip());
+                    }
+                    // look up the branch target in the address map
+                    let Some(branch_target_index) =
+                        self.address_map.get(&instruction.near_branch_target())
+                    else {
+                        if icall.ip() == DEBUGGING_IP {
+                            println!("Branch target not found in address map")
                         }
+                        return;
+                    };
 
-                        // if not, we search for the call instruction within the next instructions
-                        // get the iterator at this position
-                        let mut instruction_iter =
-                            self.instructions.iter().skip(*branch_target_index);
+                    // get the branch target instruction
+                    let Some(branch_target) = self.instructions.get(*branch_target_index) else {
+                        if icall.ip() == DEBUGGING_IP {
+                            println!("Branch instruction not found in instr vec")
+                        }
+                        return;
+                    };
 
-                        for _ in 0..ARGUMENT_LOADING_INSTRUCTION_COUNT {
-                            let next_instruction = instruction_iter.next().unwrap();
-                            if next_instruction.ip() == icall.ip() {
-                                call_branch_found = true;
-                                break;
-                            }
+                    // check if the branch target is a ud1
+                    if branch_target.mnemonic() == Mnemonic::Ud1 {
+                        ud1_jump_found = true;
+                        return;
+                    }
+
+                    // if jumping directly to the call instruction, we have found the call branch
+                    if branch_target.ip() == icall.ip() {
+                        call_jump_found = true;
+                        return;
+                    }
+
+                    // if not, we search for the call instruction within the next instructions
+                    // ass arg preparing instructions might push the actual call a bit down
+
+                    // get the iterator at this position
+                    let mut instruction_iter = self.instructions.iter().skip(*branch_target_index);
+
+                    for _ in 0..ARGUMENT_LOADING_INSTRUCTION_COUNT {
+                        let next_instruction = instruction_iter.next().unwrap();
+                        if next_instruction.ip() == icall.ip() {
+                            call_jump_found = true;
+                            return;
                         }
                     }
+
+                    // if the jump was neither to a call or ud1, this is not CFI relevant. Keep looking
+                    cmp_found = false;
                 }
-                if instruction.mnemonic() == Mnemonic::Ud1 {
-                    // println!("UD1 found");
-                    fail_branch_found = true;
+            }
+
+            // if we have found the jump to the call, we look for the UD1 fallthrough
+            if call_jump_found {
+                match instruction.mnemonic() {
+                    Mnemonic::Ud1 => ud1_fallthrough_found = true,
+                    _ => (),
                 }
             }
         });
-        // println!("Test passed: {}", test_passed);
-        // println!("Fail branch found: {}", fail_branch_found);
-        // println!("Call branch found: {}", call_branch_found);
 
-        if test_passed && fail_branch_found && call_branch_found {
-            return Ok(());
+        if icall.ip() == 0x28d3089 {
+            println!("cmp found: {}", cmp_found);
+            println!("call jmp found: {}", call_jump_found);
+            println!("ud1 jmp found: {}", ud1_jump_found);
+            println!("ud1 fallthrough found: {}", ud1_fallthrough_found);
         }
 
+        // if we found the compare
+        if cmp_found
+            // and call jump & ud1 fallthrough
+            && ((call_jump_found && ud1_fallthrough_found)
+            // or ud1 jump & call fallthrough
+            || (ud1_jump_found))
+        {
+            // we are fine
+            return Ok(());
+        }
         return Err(());
     }
 }
-
-fn is_jump(instruction: &Instruction) -> bool {
-    let mnemonic = instruction.mnemonic();
-    return vec![
-        Mnemonic::Jb,
-        Mnemonic::Je,
-        Mnemonic::Jbe,
-        Mnemonic::Jl,
-        Mnemonic::Jle,
-        Mnemonic::Jno,
-    ]
-    .contains(&mnemonic);
-}
-
-
