@@ -1,0 +1,49 @@
+diff --git a/.gitignore b/.gitignore
+index 61fa39967b..7c15bae377 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -20,3 +20,13 @@ GTAGS
+ *.swp
+ *.patch
+ *.gcov
++
++build-cfi-no-debug/
++build-cfi/
++build-no-cfi/
++build-addr-san/
++build-mem-san/
++build-thread-san/
++compile_commands.json
++_codeql_detected_source_root
++build-codeql/
+diff --git a/hw/cxl/cxl-cdat.c b/hw/cxl/cxl-cdat.c
+index 551545f782..c40d07c99b 100644
+--- a/hw/cxl/cxl-cdat.c
++++ b/hw/cxl/cxl-cdat.c
+@@ -44,6 +44,7 @@ static void cdat_len_check(CDATSubHeader *hdr, Error **errp)
+     }
+ }
+ 
++__attribute__((no_sanitize("cfi")))
+ static void ct3_build_cdat(CDATObject *cdat, Error **errp)
+ {
+     g_autofree CDATTableHeader *cdat_header = NULL;
+@@ -61,8 +62,18 @@ static void ct3_build_cdat(CDATObject *cdat, Error **errp)
+         return;
+     }
+ 
++    asm volatile(
++        "jmp .global_DEBUG_LABEL_START_%=\n"
++        ".global_DEBUG_LABEL_START_%=:\n"
++        :
++    );
+     cdat->built_buf_len = cdat->build_cdat_table(&cdat->built_buf,
+                                                  cdat->private);
++    asm volatile(
++        "jmp .global_DEBUG_LABEL_END_%=\n"
++        ".global_DEBUG_LABEL_END_%=:\n"
++        :
++    );
+ 
+     if (cdat->built_buf_len <= 0) {
+         /* Build later as not all data available yet */
