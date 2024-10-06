@@ -2,7 +2,7 @@ use core::fmt;
 use std::{collections::HashMap, fs, io};
 
 use iced_x86::{Formatter, Instruction, IntelFormatter};
-use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
+use object::{Object, ObjectSection};
 
 #[derive(Debug)]
 pub(crate) struct FileReadError {
