@@ -8,8 +8,8 @@ mod io;
 #[command(name = "check-cfi")]
 #[command(version = "0.1")]
 struct Cli {
-    #[arg(help = "Path to binary file")]
-    file: String,
+    #[arg(help = "Path(s) to binary file")]
+    files: Vec<String>,
 
     #[arg(short, long)]
     verbose: bool,
@@ -20,14 +20,24 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
-    let file_path = cli.file;
-    // let file_path = "/home/hannes/Kth/mex/check-cfi/test/input/cfi_single_indirect";
-    let (file_content, offset) = io::read_file(&file_path);
+    let file_paths = cli.files;
 
-    let mut analyzer = Analyzer::new();
-    analyzer.disassemble(&file_content, offset);
-    analyzer.analyze();
-    let (checked, unchecked) = analyzer.get_results();
+    for path in &file_paths {
+        println!("Checking file: {}", path);
 
-    io::print_results(checked, unchecked, cli.verbose)
+        match io::read_file(&path) {
+            Ok((file_content, offset)) => {
+                let mut analyzer = Analyzer::new();
+                analyzer.disassemble(&file_content, offset);
+                analyzer.analyze();
+                let (checked, unchecked) = analyzer.get_results();
+
+                io::print_results(checked, unchecked, cli.verbose);
+            }
+            Err(e) => {
+                eprintln!("Could not read file: {}\n", e);
+                continue;
+            }
+        }
+    }
 }
