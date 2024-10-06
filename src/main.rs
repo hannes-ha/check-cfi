@@ -23,7 +23,7 @@ fn main() {
     let file_paths = cli.files;
 
     for path in &file_paths {
-        println!("Checking file: {}", path);
+        eprintln!("Checking file: {}", path);
 
         match io::read_file(&path) {
             Ok((file_content, offset)) => {

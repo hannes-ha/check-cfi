@@ -56,13 +56,17 @@ pub fn read_file(path: &str) -> Result<(Vec<u8>, u64), FileReadError> {
     Ok((Vec::from(data), adress))
 }
 
-pub fn print_instruction(instr: &Instruction, formatter: &mut IntelFormatter) {
+pub fn print_instruction(instr: &Instruction, message: String, formatter: &mut IntelFormatter) {
     let mut output = String::new();
     formatter.format(instr, &mut output);
-    println!("0x{:x} {}", instr.ip(), output);
+    println!("0x{:x} {:<30} {}", instr.ip(), output, message);
 }
 
-pub fn print_results(checked: &Vec<Instruction>, unchecked: &Vec<Instruction>, verbose: bool) {
+pub fn print_results(
+    checked: &Vec<Instruction>,
+    unchecked: &Vec<(Instruction, String)>,
+    verbose: bool,
+) {
     let mut formatter = IntelFormatter::new();
     formatter.options_mut().set_hex_prefix("0x");
     formatter.options_mut().set_hex_suffix("");
@@ -76,12 +80,12 @@ pub fn print_results(checked: &Vec<Instruction>, unchecked: &Vec<Instruction>, v
 
     if verbose {
         println!("---Unchecked:---");
-        for instr in unchecked {
-            print_instruction(&instr, &mut formatter);
+        for (instr, msg) in unchecked {
+            print_instruction(&instr, msg.to_string(), &mut formatter);
         }
         println!("---Checked:---");
         for instr in checked {
-            print_instruction(&instr, &mut formatter);
+            print_instruction(&instr, "".to_string(), &mut formatter);
         }
     }
     println!();
