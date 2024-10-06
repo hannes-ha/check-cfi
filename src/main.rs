@@ -16,7 +16,7 @@ struct Cli {
     verbose: bool,
 
     #[arg(short, long)]
-    limit_unchecked: Option<usize>,
+    backtrack_limit: Option<usize>,
 }
 
 fn main() {
@@ -28,7 +28,7 @@ fn main() {
 
         match io::read_file(&path) {
             Ok((file_content, offset)) => {
-                let mut analyzer = Analyzer::new();
+                let mut analyzer = Analyzer::new(cli.backtrack_limit);
                 analyzer.disassemble(&file_content, offset);
                 analyzer.analyze();
                 let (checked, unchecked) = analyzer.get_results();

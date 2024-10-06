@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use iced_x86::{Instruction, OpAccess, Register};
+use iced_x86::{Instruction, Register};
 use petgraph::graphmap::DiGraphMap;
 
 use crate::analyze::{get_register_or_mem_base, Analyzer};
@@ -65,31 +65,8 @@ impl Cfg {
                 continue;
             };
 
-            let instruction = analyzer.get_instruction(current_node)?;
-            let info = analyzer.get_instruction_info(&instruction);
-
-            let written_registers = info
-                .used_registers()
-                .iter()
-                .filter(|register_use| match register_use.access() {
-                    OpAccess::Write
-                    | OpAccess::CondWrite
-                    | OpAccess::ReadWrite
-                    | OpAccess::ReadCondWrite => true,
-                    _ => false,
-                })
-                .map(|register_write_use| register_write_use.register())
-                .collect::<Vec<_>>();
-
-            let read_registers = info
-                .used_registers()
-                .iter()
-                .filter(|register_use| match register_use.access() {
-                    OpAccess::Read => true,
-                    _ => false,
-                })
-                .map(|register_read_use| register_read_use.register())
-                .collect::<Vec<_>>();
+            let written_registers = analyzer.get_written_registers(current_node)?;
+            let read_registers = analyzer.get_read_registers(current_node)?;
 
             // if all read registers are safe, add written registers to trusted.
             // otherwise remove all from trusted
@@ -105,11 +82,11 @@ impl Cfg {
 
             // this is flawed, as paths leading to the same node but with different states are
             // discarded. dont know how to solve
-            for nb in self.graph.neighbors(current_node) {
+            self.graph.neighbors(current_node).for_each(|nb| {
                 if !visited.contains(&nb) {
                     stack.push((nb, local_trusted.clone()));
                 }
-            }
+            })
         }
 
         // all fine!
