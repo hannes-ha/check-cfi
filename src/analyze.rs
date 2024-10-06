@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use iced_x86::{
     Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpKind,
@@ -6,29 +6,13 @@ use iced_x86::{
 };
 use indicatif::ProgressStyle;
 
+use crate::cfg::Cfg;
+
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
 const DEBUGGING_IP: u64 = 0x5fb011;
 const BACKTRACK_LIMIT: usize = 200;
 
-/*
-            idea:
-        - To determine a call as cfi-checked, we require the following:
-            - the target must have been compared to something else.
-            - between the compare and the call, there should exist two branches
-                - one leads to a ud1
-                - the other leads to the call
-            - the register/mem location may not be altered between the cmp and call.
-
-            caviats:
-        - the branch to the call instruction does not need to be direct, often it will point to instructions loading arguments.
-             but no modifications to the call target should be made before the actual call
-        - the actual santization is done in other registers, holding the same value
-        - the comparison may be done with a "test" instruction.
-        - the ud1 may be called by a jmp
-*/
-
-// allow unused
 #[allow(dead_code)]
 pub struct Analyzer {
     instructions: Vec<Instruction>,
@@ -186,10 +170,81 @@ impl Analyzer {
         // assert_untouched(&graph, cmp_instruction) -> bool
         //
         // running only ud1 check gives 191 "misses" wich is probably what to aim for.
+        // if no entrypoints, fail
+        if cfg.entrypoints.len() == 0 {
+            return Err("No entrypoints found".to_string());
+        }
+
         for entrypoint in &cfg.entrypoints {
             let _cmp_ip = cfg.find_compare(&self, *entrypoint)?;
         }
         Ok(())
+    }
+
+    pub fn generate_cfg(&self, ip: u64) -> Result<Cfg, String> {
+        let mut cfg = Cfg::new();
+
+        // insert the icall
+        let icall_instruction = self.get_instruction(ip)?;
+        cfg.add_node(ip);
+        let _icall_target = get_register_or_mem_base(&icall_instruction, 0);
+
+        let mut queue = VecDeque::<u64>::new();
+        queue.push_back(ip);
+
+        while !queue.is_empty() {
+            let Some(node_ip) = queue.pop_front() else {
+                break;
+            };
+
+            let instruction = self.get_instruction(node_ip)?;
+            let parents = self.get_parents(node_ip)?;
+            let mnemonic = instruction.mnemonic();
+
+            // we should stop as early as possible for performance reasons
+            // top of function is last resort and not very reliable
+            if mnemonic == Mnemonic::Push && instruction.op0_register() == Register::RBP
+                || mnemonic == Mnemonic::Push && instruction.op0_register() == Register::RSP
+                || instruction.flow_control() == FlowControl::Interrupt
+                || instruction.flow_control() == FlowControl::Return
+            {
+                cfg.entrypoints.push(node_ip);
+                continue;
+            }
+            // stop when mov into cmp register
+            // if mnemonic == Mnemonic::Mov && instruction.op0_register() == icall_target {
+            //     cfg.entrypoints.push(node_ip);
+            //     continue;
+            // }
+
+            for parent in parents {
+                let parent_ip = parent.ip();
+                // add node if it doesnt already exist
+                if !cfg.contains_node(parent_ip) {
+                    cfg.add_node(parent_ip);
+                    // we dont need to visit parents more than once
+                    queue.push_back(parent_ip);
+                }
+                // else just add edge
+                cfg.add_edge(parent_ip, node_ip);
+            }
+        }
+
+        Ok(cfg)
+    }
+
+    fn get_parents(&self, ip: u64) -> Result<Vec<Instruction>, String> {
+        let index = self.get_instruction_index(ip)?;
+        let chronological_prev = self.get_instruction_from_index(index - 1)?;
+        let mut jump_prevs = self.get_jumps_to(ip);
+        // check if chronological prev is really a parent
+        match chronological_prev.flow_control() {
+            FlowControl::Call | FlowControl::Next | FlowControl::ConditionalBranch => {
+                jump_prevs.push(chronological_prev)
+            }
+            _ => (),
+        }
+        Ok(jump_prevs)
     }
 
     #[allow(dead_code)]
