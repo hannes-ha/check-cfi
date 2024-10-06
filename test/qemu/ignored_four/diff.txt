@@ -1,0 +1,39 @@
+diff --git a/.gitignore b/.gitignore
+index 61fa39967b..a8b1d514ba 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,5 +1,9 @@
+ /GNUmakefile
+ /build/
++/build-cfi/
++/build-cfi-no-debug/
++/build-no-cfi/
++compile_commands.json
+ /.cache/
+ /.vscode/
+ *.pyc
+diff --git a/hw/virtio/virtio-bus.c b/hw/virtio/virtio-bus.c
+index 896feb37a1..dcc03ae7dc 100644
+--- a/hw/virtio/virtio-bus.c
++++ b/hw/virtio/virtio-bus.c
+@@ -243,6 +243,8 @@ int virtio_bus_start_ioeventfd(VirtioBusState *bus)
+     return 0;
+ }
+ 
++
++__attribute__((no_sanitize("cfi")))
+ void virtio_bus_stop_ioeventfd(VirtioBusState *bus)
+ {
+     VirtIODevice *vdev;
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index c5bedca848..bd0b8a7b4b 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -2130,6 +2130,7 @@ void virtio_queue_enable(VirtIODevice *vdev, uint32_t queue_index)
+     }
+ }
+ 
++__attribute__((no_sanitize("cfi")))
+ void virtio_reset(void *opaque)
+ {
+     VirtIODevice *vdev = opaque;

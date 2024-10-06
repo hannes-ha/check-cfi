@@ -1,0 +1,26 @@
+diff --git a/.gitignore b/.gitignore
+index 61fa39967b..7b2ef2b269 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -20,3 +20,9 @@ GTAGS
+ *.swp
+ *.patch
+ *.gcov
++
++build-cfi-no-debug/
++build-cfi/
++build-no-cfi/
++compile_commands.json
++
+diff --git a/job.c b/job.c
+index 660ce22c56..ac476f44c3 100644
+--- a/job.c
++++ b/job.c
+@@ -96,6 +96,7 @@ struct JobTxn {
+     int refcnt;
+ };
+ 
++QEMU_DISABLE_CFI
+ void job_lock(void)
+ {
+     qemu_mutex_lock(&job_mutex);
