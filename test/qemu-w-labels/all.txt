@@ -1,9 +1,0 @@
-ignored_chr/qemu-system-x86_64
-ignored_ct3/qemu-system-x86_64
-ignored_irq/qemu-system-x86_64
-ignored_job/qemu-system-x86_64
-ignored_vhost/qemu-system-x86_64
-ignored_virtio/qemu-system-x86_64
-ignored_xen/qemu-system-x86_64
-macro_disabled/qemu-system-x86_64
-no_ignore/qemu-system-x86_64
