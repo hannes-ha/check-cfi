@@ -6,6 +6,14 @@ use indicatif::ProgressStyle;
 const INSTRUCTION_BUFFER_SIZE: usize = 15;
 
 /*
+            idea:
+        - To determine a call as cfi-checked, we require the following:
+            - the target must have been compared to something else.
+            - between the compare and the call, there should exist two branches
+                - one leads to a ud1
+                - the other leads to the call
+            - the register/mem location may not be altered between the cmp and call.
+
             caviats:
         - the branch to the call instruction does not need to be direct, often it will point to instructions loading arguments.
              but no modifications to the call target should be made before the actual call
@@ -22,10 +30,12 @@ fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -
         .take_while(|instr| instr.mnemonic() != Mnemonic::Cmp)
         .collect();
 
-    // might need to allow distance here
+    // if we did not find a cmp, fail
+    if relevant_inst.len() == predecessors.len() {
+        return Err(());
+    }
 
-    // reverse relevant instructions again
-    // but keep as iterator
+
 
     // the instruction after the cmp should be a jump
     let jmp_target: u64;
@@ -71,9 +81,16 @@ fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -
             _ => {}
         }
     }
+    // if no args is passed to the call, the jump target may be the call instruction
+    if icall.ip() == jmp_target {
+        jump_target_passed = Ok(());
+        
+    }
 
     jump_target_passed
 }
+
+
 pub fn disassembled_iced(
     code: &[u8],
     offset: u64,
