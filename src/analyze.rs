@@ -108,14 +108,25 @@ impl Analyzer {
         Ok(read_regs)
     }
 
-    pub fn disassemble(&mut self, code: &[u8], code_seg_offset: u64) {
+    pub fn disassemble(
+        &mut self,
+        code: &[u8],
+        code_seg_offset: u64,
+        symbol_map: &mut HashMap<u64, String>,
+    ) {
         let mut decoder = Decoder::new(64, code, DecoderOptions::NONE);
         decoder.set_ip(code_seg_offset);
 
         let progress = io::progress_bar(code.len() as u64, "Disassembling");
 
+        let mut current_symbol = "".to_string();
+
         let mut instruction_index = 0;
         for instruction in decoder.iter() {
+            current_symbol = match symbol_map.get(&instruction.ip()) {
+                Some(new_sym) => new_sym.to_string(),
+                _ => current_symbol,
+            };
             self.instructions.push(instruction);
             self.address_map.insert(instruction.ip(), instruction_index);
 
@@ -126,6 +137,7 @@ impl Analyzer {
             {
                 if !instruction.is_ip_rel_memory_operand() {
                     self.icalls.push(instruction);
+                    symbol_map.insert(instruction.ip(), current_symbol.clone());
                 }
             }
 
