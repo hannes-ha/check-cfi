@@ -3,7 +3,7 @@ use std::collections::{HashSet, VecDeque};
 use iced_x86::{FlowControl, Instruction, Mnemonic, OpKind, Register};
 use petgraph::graphmap::DiGraphMap;
 
-use crate::analyze::{get_register_or_mem_base, is_callee_saved, Analyzer};
+use crate::analyze::{get_register_or_mem_base, is_callee_saved, is_stack_relative, Analyzer};
 
 #[derive(Clone)]
 pub struct CallPath {
@@ -67,7 +67,10 @@ impl Cfg {
             }
 
             // trusted registers evolve from a cmp leading to a ud1
-            if mnemonic == Mnemonic::Cmp {
+            if mnemonic == Mnemonic::Cmp
+                && !is_stack_relative(&instruction, 0)
+                && !is_stack_relative(&instruction, 1)
+            {
                 Analyzer::debug(icall_ip, "found cmp".to_string());
 
                 let mut stack = analyzer.get_children(call_path.entrypoint)?;
@@ -80,6 +83,7 @@ impl Cfg {
                             .trusted_registers
                             .insert(instruction.op0_register());
                         call_path.compare_ip = instruction.ip();
+
                         Analyzer::debug(
                             icall_ip,
                             format!("Trusting {:?}", instruction.op0_register()),
@@ -118,15 +122,17 @@ impl Cfg {
                 }
             }
 
-            // moving into registers propagate trust
+            // moving into trusted registers propagate trust
             if mnemonic == Mnemonic::Mov {
                 if call_path
                     .trusted_registers
                     .contains(&instruction.op0_register())
+                    && !is_stack_relative(&instruction, 1)
                 {
                     call_path
                         .trusted_registers
                         .insert(instruction.op1_register());
+
                     if instruction.op1_kind() == OpKind::Register {
                         call_path
                             .trusted_registers
@@ -215,10 +221,13 @@ impl Cfg {
             let read_registers = analyzer.get_read_registers(current_node)?;
 
             // if all read registers are safe, add written registers to trusted.
+            // except the stack relative wich may never be trusted
             // otherwise remove all from trusted
             if read_registers.iter().all(|r| local_trusted.contains(&r)) {
-                written_registers.iter().for_each(|w_r| {
-                    local_trusted.insert(*w_r);
+                written_registers.iter().for_each(|&w_r| {
+                    if w_r != Register::RSP {
+                        local_trusted.insert(w_r);
+                    }
                 });
             } else {
                 written_registers.iter().for_each(|w_r| {
@@ -234,7 +243,9 @@ impl Cfg {
                     self.target_icall.ip(),
                     format!("found load from jmp table at 0x{:x}", instruction.ip()),
                 );
-                local_trusted.insert(instruction.op0_register());
+                if !is_stack_relative(&instruction, 0) {
+                    local_trusted.insert(instruction.op0_register());
+                }
             }
 
             // if we pass a call, untrust everything that is not callee-saved
@@ -246,9 +257,8 @@ impl Cfg {
                     }
                 })
             }
-            //
-            // this is flawed, as paths leading to the same node but with different states are
-            // discarded. dont know how to solve
+
+            // TODO: paths leading to the same node but with different states are discarded
             self.graph.neighbors(current_node).for_each(|nb| {
                 if !visited.contains(&nb) {
                     stack.push((nb, local_trusted.clone()));

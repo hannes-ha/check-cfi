@@ -194,6 +194,11 @@ impl Analyzer {
     }
 
     fn is_cfi_checked(&self, icall: &Instruction) -> Result<(), String> {
+        // if the call target is stored on the stack, assume untrusted
+        if is_stack_relative(icall, 0) {
+            return Err("Call target spilled to stack".to_string());
+        }
+
         let cfg = Cfg::new(*icall, self)?;
 
         if cfg.graph.node_count() > 1500 {
@@ -299,6 +304,14 @@ pub fn get_register_or_mem_base(instruction: &Instruction, position: u32) -> Reg
         OpKind::Register => instruction.op_register(position),
         OpKind::Memory => instruction.memory_base(),
         unknown => unimplemented!("unknown opkind {:?}", unknown),
+    }
+}
+
+pub fn is_stack_relative(instruction: &Instruction, position: u32) -> bool {
+    match instruction.op_kind(position) {
+        OpKind::Register => instruction.op_register(position) == Register::RSP,
+        OpKind::Memory => instruction.memory_base() == Register::RSP,
+        _ => false,
     }
 }
 
