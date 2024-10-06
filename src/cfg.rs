@@ -3,7 +3,7 @@ use std::collections::{HashSet, VecDeque};
 use iced_x86::{FlowControl, Instruction, Mnemonic, OpKind, Register};
 use petgraph::graphmap::DiGraphMap;
 
-use crate::analyze::{get_register_or_mem_base, Analyzer};
+use crate::analyze::{get_register_or_mem_base, is_callee_saved, Analyzer};
 
 #[derive(Clone)]
 pub struct CallPath {
@@ -235,6 +235,16 @@ impl Cfg {
                 local_trusted.insert(instruction.op0_register());
             }
 
+            // if we pass a call, untrust everything that is not callee-saved
+            if instruction.mnemonic() == Mnemonic::Call {
+                let current_trusted = local_trusted.clone();
+                current_trusted.iter().for_each(|ct| {
+                    if !is_callee_saved(ct) {
+                        local_trusted.remove(&ct);
+                    }
+                })
+            }
+            //
             // this is flawed, as paths leading to the same node but with different states are
             // discarded. dont know how to solve
             self.graph.neighbors(current_node).for_each(|nb| {
