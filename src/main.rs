@@ -2,7 +2,7 @@ use std::fs;
 
 use capstone::prelude::*;
 use clap::{Arg, Command};
-use object::{Object, ObjectSection, SectionKind};
+use object::{Object, ObjectSection};
 
 extern crate capstone;
 
@@ -16,7 +16,7 @@ fn read_file(path: &str) -> Vec<u8> {
     // get text segment
     let text_segment = file
         .sections()
-        .find(|section| section.kind() == SectionKind::Text)
+        .find(|section| section.name().unwrap() == ".text")
         .expect("No text segment found.");
 
     // extract data
