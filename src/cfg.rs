@@ -57,7 +57,12 @@ impl Cfg {
             if current_node == self.target_icall.ip() {
                 match local_trusted.contains(&get_register_or_mem_base(&self.target_icall, 0)) {
                     true => continue,
-                    false => return Err("Call target not trusted".to_string()),
+                    false => {
+                        return Err(format!(
+                            "Call target not trusted when looking from 0x{:x}",
+                            entry_point
+                        ))
+                    }
                 };
             }
 
@@ -124,7 +129,6 @@ impl Cfg {
         for (_, trusted_registers, cmp_ip) in &self.entrypoints {
             self.untrust_dfs(&analyzer, *cmp_ip, trusted_registers.clone())?;
         }
-
         Ok(())
     }
 }

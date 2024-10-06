@@ -5,13 +5,12 @@ use iced_x86::{
     Mnemonic, OpKind, Register,
 };
 use indicatif::ProgressStyle;
-use petgraph::visit::Bfs;
 
 use crate::cfg::Cfg;
 
 const INSTRUCTION_BUFFER_SIZE: usize = 40;
 const ARGUMENT_LOADING_INSTRUCTION_COUNT: usize = 20;
-const DEBUGGING_IP: u64 = 0x64918c;
+const DEBUGGING_IP: u64 = 0x619051;
 const BACKTRACK_LIMIT: usize = 200;
 
 #[allow(dead_code)]
@@ -249,7 +248,9 @@ impl Analyzer {
                 Analyzer::debug(icall_instruction.ip(), "found cmp".to_string());
 
                 let mut stack = self.get_children(&instruction)?;
+                let mut visited = HashSet::new();
                 while let Some(cmp_child) = stack.pop() {
+                    visited.insert(cmp_child.ip());
                     if cmp_child.mnemonic() == Mnemonic::Ud1 {
                         // the registers involved in the compare are now considered trusted
                         trusted_registers.insert(instruction.op0_register());
@@ -273,7 +274,20 @@ impl Analyzer {
                     if cmp_child.is_jmp_short_or_near() || cmp_child.is_jcc_short_or_near() {
                         let grandchildren = self.get_children(&cmp_child)?;
                         for gc in grandchildren {
-                            stack.push(gc);
+                            if !visited.contains(&gc.ip()) {
+                                stack.push(gc);
+                            }
+                        }
+                    }
+
+                    // if we find something else, its fine as long as it is nodes within the path,
+                    // else we stop looking
+                    if cfg.fwd_graph.contains_node(cmp_child.ip()) {
+                        let grandchildren = self.get_children(&cmp_child)?;
+                        for gc in grandchildren {
+                            if !visited.contains(&gc.ip()) {
+                                stack.push(gc);
+                            }
                         }
                     }
                 }
