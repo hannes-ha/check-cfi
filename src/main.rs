@@ -145,7 +145,7 @@ fn is_cfi_checked(icall: &Instruction, predecessors: &VecDeque<Instruction>) -> 
     return false;
 }
 
-fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -> bool {
+fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -> Result<(), ()> {
     // only keep instructions since last cmp
     let mut relevant_inst: VecDeque<_> = predecessors
         .iter()
@@ -160,45 +160,39 @@ fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -
 
     // the instruction after the cmp should be a jump
     let jmp_target: u64;
-    match relevant_inst.pop_back() {
-        Some(instr) => {
-            if instr.mnemonic() != Mnemonic::Jbe {
-                return false;
-            }
+    let instr = relevant_inst.pop_back().ok_or(())?;
+    match instr.mnemonic() {
+        Mnemonic::Jbe | Mnemonic::Je => {
             jmp_target = instr.memory_displacement64();
         }
-        None => return false,
+        _ => return Err(()),
     }
 
     // next instruction should be ud1
-    match relevant_inst.pop_back() {
-        Some(instr) => {
-            if instr.mnemonic() != Mnemonic::Ud1 {
-                return false;
-            }
-        }
-        None => return false,
+    let instr = relevant_inst.pop_back().ok_or(())?;
+    if instr.mnemonic() != Mnemonic::Ud1 {
+        return Err(());
     }
 
     // now, the jump target should be passed
     // and the target register should not be touched
 
-    let mut jump_target_passed = false;
+    let mut jump_target_passed = Err(());
     while let Some(instr) = relevant_inst.pop_back() {
         if instr.ip() == jmp_target {
-            jump_target_passed = true;
+            jump_target_passed = Ok(())
         }
 
         // this might be unnessecary/overkill
         match icall.op0_kind() {
             OpKind::Register => {
                 if instr.op0_register() == icall.op0_register() {
-                    return false;
+                    return Err(());
                 }
             }
             OpKind::Memory => {
                 if instr.memory_displacement64() == icall.memory_displacement64() {
-                    return false;
+                    return Err(());
                 }
             }
             _ => {}
@@ -232,7 +226,7 @@ fn disassembled_iced(code: &[u8]) {
             // we somehow need to remove the "indirect" calls to __cxa_finalize
             // are these simply DSOs?
             if !instruction.is_ip_rel_memory_operand() {
-                if is_cfi_checked_2(&instruction, &predecessors) {
+                if is_cfi_checked_2(&instruction, &predecessors).is_ok() {
                     output = format!(
                         "{} {}",
                         output.green().bold(),
@@ -270,13 +264,7 @@ fn main() {
         .get_matches();
 
     let file_path = matches.get_one::<String>("FILE").expect("FILE is required");
-    // let file_path = "/home/hannes/Kth/mex/check-cfi/test/input/cfi_indirect";
+    // let file_path = "/home/hannes/Kth/mex/check-cfi/test/input/cfi_single_indirect";
     let file_content = read_file(&file_path);
     disassembled_iced(&file_content);
 }
-
-// when we encounter a indirect call, we want to make sure that the target is sanitized
-// we want to make sure that the call is preceded by
-// 1. a cmp with something
-// 2. a check of the result
-// 3. a jmp to ud1 if check fails
