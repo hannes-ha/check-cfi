@@ -5,7 +5,10 @@ use iced_x86::{
     Mnemonic, OpAccess, OpKind, Register,
 };
 
-use crate::{cfg::Cfg, io};
+use crate::{
+    cfg::{CallPath, Cfg},
+    io,
+};
 
 const DEBUGGING_IP: u64 = 0;
 
@@ -198,15 +201,15 @@ impl Analyzer {
             );
             eprintln!(
                 "entry: {:?}",
-                cfg.entrypoints
+                cfg.call_paths
                     .iter()
-                    .map(|(e, _, _)| format!("0x{:x}", e))
+                    .map(|cp| format!("0x{:x}", cp.entrypoint))
                     .collect::<Vec<_>>()
             );
         }
 
         // if no entrypoints, fail.
-        if cfg.entrypoints.len() == 0 {
+        if cfg.call_paths.len() == 0 {
             return Err("No entrypoints found".to_string());
         }
 
@@ -245,7 +248,8 @@ impl Analyzer {
 
             // Stop at function border
             if self.function_borders.contains(&instruction.ip()) {
-                cfg.entrypoints.push((node_ip, trusted_registers, cmp_ip));
+                cfg.call_paths
+                    .push(CallPath::new(node_ip, trusted_registers, cmp_ip));
                 continue;
             }
 
@@ -303,7 +307,8 @@ impl Analyzer {
 
             // if the call register is trusted, we can stop looking at this leg
             if trusted_registers.contains(&icall_target) {
-                cfg.entrypoints.push((node_ip, trusted_registers, cmp_ip));
+                cfg.call_paths
+                    .push(CallPath::new(node_ip, trusted_registers, cmp_ip));
                 continue;
             }
 

@@ -5,9 +5,25 @@ use petgraph::graphmap::DiGraphMap;
 
 use crate::analyze::{get_register_or_mem_base, Analyzer};
 
+pub struct CallPath {
+    pub entrypoint: u64,
+    pub trusted_registers: HashSet<Register>,
+    pub compare_ip: u64,
+}
+
+impl CallPath {
+    pub fn new(entrypoint: u64, trusted_registers: HashSet<Register>, compare_ip: u64) -> Self {
+        Self {
+            entrypoint,
+            trusted_registers,
+            compare_ip,
+        }
+    }
+}
+
 pub struct Cfg {
     pub graph: DiGraphMap<u64, ()>,
-    pub entrypoints: Vec<(u64, HashSet<Register>, u64)>,
+    pub call_paths: Vec<CallPath>,
     target_icall: Instruction,
 }
 
@@ -15,13 +31,13 @@ impl Cfg {
     pub fn new(target_icall: Instruction) -> Self {
         Cfg {
             graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
-            entrypoints: Vec::new(),
+            call_paths: Vec::new(),
             target_icall,
         }
     }
 
     pub fn cmp_found(&self) -> bool {
-        return self.entrypoints.iter().all(|(_, _, cmp_ip)| *cmp_ip > 0);
+        return self.call_paths.iter().all(|path| path.compare_ip > 0);
     }
 
     pub fn add_node(&mut self, value: u64) -> u64 {
@@ -97,8 +113,8 @@ impl Cfg {
     // between the compare and the goal, for each entrypoint as these might have different sets of
     // trusted registers
     pub fn assert_icall_to_trusted_register(&self, analyzer: &Analyzer) -> Result<(), String> {
-        for (_, trusted_registers, cmp_ip) in &self.entrypoints {
-            self.untrust_dfs(&analyzer, *cmp_ip, trusted_registers.clone())?;
+        for path in &self.call_paths {
+            self.untrust_dfs(&analyzer, path.compare_ip, path.trusted_registers.clone())?;
         }
         Ok(())
     }
