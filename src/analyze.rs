@@ -6,17 +6,10 @@ use indicatif::ProgressStyle;
 const INSTRUCTION_BUFFER_SIZE: usize = 15;
 
 /*
-    A call instruction is considered "cfi-checked" if:
-        - the value has ben compared (cmp) with another, static value.
-        - the result of the comparison result in a branch to the call instruction OR to a ud1 instruction
-
             caviats:
         - the branch to the call instruction does not need to be direct, often it will point to instructions loading arguments.
              but no modifications to the call target should be made before the actual call
-        - the comparison can be made on another register, holding the same value (ignore?)
-
-
-
+        - the actual santization is done in other registers, holding the same value
         - the comparison may be done with a "test" instruction.
         - the ud1 may be called by a jmp
 */
@@ -63,7 +56,10 @@ fn is_cfi_checked_2(icall: &Instruction, predecessors: &VecDeque<Instruction>) -
         // this might be unnessecary/overkill
         match icall.op0_kind() {
             OpKind::Register => {
-                if instr.op0_register() == icall.op0_register() {
+                // clang sometimes emit a mov rax rax wich is a no-op
+                if instr.op0_register() == icall.op0_register()
+                    && instr.op1_register() != icall.op1_register()
+                {
                     return Err(());
                 }
             }
