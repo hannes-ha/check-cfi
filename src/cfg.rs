@@ -6,10 +6,7 @@ use petgraph::graphmap::DiGraphMap;
 use crate::analyze::{get_register_or_mem_base, Analyzer};
 
 pub struct Cfg {
-    pub fwd_graph: DiGraphMap<u64, ()>,
-    // we need a directed graph to be able to dfs "one way", but also a way to traverse the
-    // instructions backwards
-    pub bwd_graph: DiGraphMap<u64, ()>,
+    pub graph: DiGraphMap<u64, ()>,
     pub entrypoints: Vec<(u64, HashSet<Register>, u64)>,
     target_icall: Instruction,
 }
@@ -17,8 +14,7 @@ pub struct Cfg {
 impl Cfg {
     pub fn new(target_icall: Instruction) -> Self {
         Cfg {
-            fwd_graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
-            bwd_graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
+            graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
             entrypoints: Vec::new(),
             target_icall,
         }
@@ -29,17 +25,15 @@ impl Cfg {
     }
 
     pub fn add_node(&mut self, value: u64) -> u64 {
-        self.fwd_graph.add_node(value);
-        self.bwd_graph.add_node(value)
+        self.graph.add_node(value)
     }
 
     pub fn contains_node(&mut self, value: u64) -> bool {
-        self.fwd_graph.contains_node(value)
+        self.graph.contains_node(value)
     }
 
-    pub fn add_edge(&mut self, from: u64, to: u64) {
-        self.fwd_graph.add_edge(from, to, ());
-        self.bwd_graph.add_edge(to, from, ());
+    pub fn add_edge(&mut self, from: u64, to: u64) -> Option<()> {
+        self.graph.add_edge(from, to, ())
     }
 
     pub fn untrust_dfs(
@@ -67,7 +61,7 @@ impl Cfg {
             }
 
             // dead end, this is fine
-            if self.fwd_graph.neighbors(current_node).count() == 0 {
+            if self.graph.neighbors(current_node).count() == 0 {
                 continue;
             };
 
@@ -111,7 +105,7 @@ impl Cfg {
 
             // this is flawed, as paths leading to the same node but with different states are
             // discarded. dont know how to solve
-            for nb in self.fwd_graph.neighbors(current_node) {
+            for nb in self.graph.neighbors(current_node) {
                 if !visited.contains(&nb) {
                     stack.push((nb, local_trusted.clone()));
                 }
