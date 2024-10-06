@@ -1,18 +1,18 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
-use iced_x86::{Instruction, Register};
+use iced_x86::{Instruction, Mnemonic, OpKind, Register};
 use petgraph::graphmap::DiGraphMap;
 
 use crate::analyze::{get_register_or_mem_base, Analyzer};
 
 pub struct CallPath {
     pub entrypoint: u64,
-    pub trusted_registers: HashSet<Register>,
-    pub compare_ip: u64,
+    trusted_registers: HashSet<Register>,
+    compare_ip: u64,
 }
 
 impl CallPath {
-    pub fn new(entrypoint: u64, trusted_registers: HashSet<Register>, compare_ip: u64) -> Self {
+    fn new(entrypoint: u64, trusted_registers: HashSet<Register>, compare_ip: u64) -> Self {
         Self {
             entrypoint,
             trusted_registers,
@@ -28,31 +28,122 @@ pub struct Cfg {
 }
 
 impl Cfg {
-    pub fn new(target_icall: Instruction) -> Self {
-        Cfg {
-            graph: DiGraphMap::<u64, ()>::with_capacity(100, 200),
-            call_paths: Vec::new(),
-            target_icall,
+    pub fn new(target_icall: Instruction, analyzer: &Analyzer) -> Result<Self, String> {
+        let mut graph = DiGraphMap::<u64, ()>::new();
+        let mut call_paths = Vec::<CallPath>::new();
+        let icall_ip = target_icall.ip();
+        let icall_target = get_register_or_mem_base(&target_icall, 0);
+
+        graph.add_node(icall_ip);
+
+        // track set of trusted registers to limit search backwards
+        let mut queue = VecDeque::<(u64, HashSet<Register>, u64)>::new();
+        queue.push_back((icall_ip, HashSet::default(), 0));
+
+        while !queue.is_empty() {
+            let Some((node_ip, mut trusted_registers, mut cmp_ip)) = queue.pop_front() else {
+                break;
+            };
+
+            let instruction = analyzer.get_instruction(node_ip)?;
+            let parents = analyzer.get_parents(node_ip)?;
+            let mnemonic = instruction.mnemonic();
+
+            // Stop at function border
+            if analyzer.is_function_border(&node_ip) {
+                call_paths.push(CallPath::new(node_ip, trusted_registers, cmp_ip));
+                continue;
+            }
+
+            // trusted registers evolve from a cmp leading to a ud1
+            if mnemonic == Mnemonic::Cmp {
+                Analyzer::debug(icall_ip, "found cmp".to_string());
+
+                let mut stack = analyzer.get_children(node_ip)?;
+                let mut visited = HashSet::new();
+                while let Some(cmp_child) = stack.pop() {
+                    visited.insert(cmp_child.ip());
+                    if cmp_child.mnemonic() == Mnemonic::Ud1 {
+                        // the registers involved in the compare are now considered trusted
+                        trusted_registers.insert(instruction.op0_register());
+                        cmp_ip = instruction.ip();
+                        Analyzer::debug(
+                            icall_ip,
+                            format!("Trusting {:?}", instruction.op0_register()),
+                        );
+
+                        match instruction.op1_kind() {
+                            OpKind::Register => {
+                                Analyzer::debug(
+                                    icall_ip,
+                                    format!("Trusting {:?}", instruction.op1_register()),
+                                );
+                                trusted_registers.insert(instruction.op1_register());
+                            }
+                            _ => (),
+                        }
+                        continue;
+                    }
+
+                    // follow jumps. might be jmp -> jmp -> ud1
+                    // do not follow nodes not on path unless jumps
+                    if cmp_child.is_jmp_short_or_near()
+                        || cmp_child.is_jcc_short_or_near()
+                        || graph.contains_node(cmp_child.ip())
+                    {
+                        analyzer
+                            .get_children(cmp_child.ip())?
+                            .iter()
+                            .for_each(|gc| {
+                                if !visited.contains(&gc.ip()) {
+                                    stack.push(*gc)
+                                }
+                            });
+                    }
+                }
+            }
+
+            // moving into registers propagate trust
+            if mnemonic == Mnemonic::Mov {
+                if trusted_registers.contains(&instruction.op0_register()) {
+                    trusted_registers.insert(instruction.op1_register());
+                    if instruction.op1_kind() == OpKind::Register {
+                        trusted_registers.remove(&instruction.op0_register());
+                    }
+                }
+            }
+
+            // if the call register is trusted, we can stop looking at this leg
+            if trusted_registers.contains(&icall_target) {
+                call_paths.push(CallPath::new(node_ip, trusted_registers, cmp_ip));
+                continue;
+            }
+
+            for parent in parents {
+                let parent_ip = parent.ip();
+                // add node if it doesnt already exist
+                if !graph.contains_node(parent_ip) {
+                    graph.add_node(parent_ip);
+                    // we dont need to visit parents more than once
+                    queue.push_back((parent_ip, trusted_registers.clone(), cmp_ip));
+                }
+                // else just add edge
+                graph.add_edge(parent_ip, node_ip, ());
+            }
         }
+
+        Ok(Self {
+            graph,
+            call_paths,
+            target_icall,
+        })
     }
 
     pub fn cmp_found(&self) -> bool {
         return self.call_paths.iter().all(|path| path.compare_ip > 0);
     }
 
-    pub fn add_node(&mut self, value: u64) -> u64 {
-        self.graph.add_node(value)
-    }
-
-    pub fn contains_node(&mut self, value: u64) -> bool {
-        self.graph.contains_node(value)
-    }
-
-    pub fn add_edge(&mut self, from: u64, to: u64) -> Option<()> {
-        self.graph.add_edge(from, to, ())
-    }
-
-    pub fn untrust_dfs(
+    fn untrust_dfs(
         &self,
         analyzer: &Analyzer,
         entry_point: u64,
