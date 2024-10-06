@@ -1,22 +1,30 @@
 use std::collections::{HashSet, VecDeque};
 
-use iced_x86::{Instruction, Mnemonic, OpKind, Register};
+use iced_x86::{FlowControl, Instruction, Mnemonic, OpKind, Register};
 use petgraph::graphmap::DiGraphMap;
 
 use crate::analyze::{get_register_or_mem_base, Analyzer};
 
+#[derive(Clone)]
 pub struct CallPath {
     pub entrypoint: u64,
     trusted_registers: HashSet<Register>,
     compare_ip: u64,
+    load_ip: u64,
 }
 
 impl CallPath {
-    fn new(entrypoint: u64, trusted_registers: HashSet<Register>, compare_ip: u64) -> Self {
+    fn new(
+        entrypoint: u64,
+        trusted_registers: HashSet<Register>,
+        compare_ip: u64,
+        load_ip: u64,
+    ) -> Self {
         Self {
             entrypoint,
             trusted_registers,
             compare_ip,
+            load_ip,
         }
     }
 }
@@ -37,21 +45,22 @@ impl Cfg {
         graph.add_node(icall_ip);
 
         // track set of trusted registers to limit search backwards
-        let mut queue = VecDeque::<(u64, HashSet<Register>, u64)>::new();
-        queue.push_back((icall_ip, HashSet::default(), 0));
+        let mut queue = VecDeque::<CallPath>::new();
+        queue.push_back(CallPath::new(icall_ip, HashSet::default(), 0, 0));
 
         while !queue.is_empty() {
-            let Some((node_ip, mut trusted_registers, mut cmp_ip)) = queue.pop_front() else {
+            let Some(mut call_path) = queue.pop_front() else {
                 break;
             };
 
-            let instruction = analyzer.get_instruction(node_ip)?;
-            let parents = analyzer.get_parents(node_ip)?;
+            let instruction = analyzer.get_instruction(call_path.entrypoint)?;
             let mnemonic = instruction.mnemonic();
 
             // Stop at function border
-            if analyzer.is_function_border(&node_ip) {
-                call_paths.push(CallPath::new(node_ip, trusted_registers, cmp_ip));
+            if analyzer.is_function_border(&call_path.entrypoint)
+                || instruction.flow_control() == FlowControl::Return
+            {
+                call_paths.push(call_path);
                 continue;
             }
 
@@ -59,14 +68,16 @@ impl Cfg {
             if mnemonic == Mnemonic::Cmp {
                 Analyzer::debug(icall_ip, "found cmp".to_string());
 
-                let mut stack = analyzer.get_children(node_ip)?;
+                let mut stack = analyzer.get_children(call_path.entrypoint)?;
                 let mut visited = HashSet::new();
                 while let Some(cmp_child) = stack.pop() {
                     visited.insert(cmp_child.ip());
                     if cmp_child.mnemonic() == Mnemonic::Ud1 {
                         // the registers involved in the compare are now considered trusted
-                        trusted_registers.insert(instruction.op0_register());
-                        cmp_ip = instruction.ip();
+                        call_path
+                            .trusted_registers
+                            .insert(instruction.op0_register());
+                        call_path.compare_ip = instruction.ip();
                         Analyzer::debug(
                             icall_ip,
                             format!("Trusting {:?}", instruction.op0_register()),
@@ -78,7 +89,9 @@ impl Cfg {
                                     icall_ip,
                                     format!("Trusting {:?}", instruction.op1_register()),
                                 );
-                                trusted_registers.insert(instruction.op1_register());
+                                call_path
+                                    .trusted_registers
+                                    .insert(instruction.op1_register());
                             }
                             _ => (),
                         }
@@ -105,17 +118,36 @@ impl Cfg {
 
             // moving into registers propagate trust
             if mnemonic == Mnemonic::Mov {
-                if trusted_registers.contains(&instruction.op0_register()) {
-                    trusted_registers.insert(instruction.op1_register());
+                if call_path
+                    .trusted_registers
+                    .contains(&instruction.op0_register())
+                {
+                    call_path
+                        .trusted_registers
+                        .insert(instruction.op1_register());
                     if instruction.op1_kind() == OpKind::Register {
-                        trusted_registers.remove(&instruction.op0_register());
+                        call_path
+                            .trusted_registers
+                            .remove(&instruction.op0_register());
                     }
                 }
             }
 
-            // if the call register is trusted, we can stop looking at this leg
-            if trusted_registers.contains(&icall_target) {
-                call_paths.push(CallPath::new(node_ip, trusted_registers, cmp_ip));
+            // LEA from jump table considered trusted
+            if mnemonic == Mnemonic::Lea {
+                if is_load_from_jmp_table(&analyzer, instruction) {
+                    call_path
+                        .trusted_registers
+                        .insert(instruction.op0_register());
+                    call_path.load_ip = instruction.ip();
+                }
+            }
+
+            let parents = analyzer.get_parents(call_path.entrypoint)?;
+
+            // if the call register is trusted, or we are at a dead end we can stop looking at this leg
+            if call_path.trusted_registers.contains(&icall_target) {
+                call_paths.push(call_path);
                 continue;
             }
 
@@ -125,10 +157,12 @@ impl Cfg {
                 if !graph.contains_node(parent_ip) {
                     graph.add_node(parent_ip);
                     // we dont need to visit parents more than once
-                    queue.push_back((parent_ip, trusted_registers.clone(), cmp_ip));
+                    let mut parent_path = call_path.clone();
+                    parent_path.entrypoint = parent_ip;
+                    queue.push_back(parent_path);
                 }
                 // else just add edge
-                graph.add_edge(parent_ip, node_ip, ());
+                graph.add_edge(parent_ip, call_path.entrypoint, ());
             }
         }
 
@@ -140,7 +174,10 @@ impl Cfg {
     }
 
     pub fn cmp_found(&self) -> bool {
-        return self.call_paths.iter().all(|path| path.compare_ip > 0);
+        return self
+            .call_paths
+            .iter()
+            .all(|path| path.compare_ip > 0 || path.load_ip > 0);
     }
 
     fn untrust_dfs(
@@ -187,6 +224,17 @@ impl Cfg {
                 });
             }
 
+            let instruction = analyzer.get_instruction(current_node)?;
+            if instruction.mnemonic() == Mnemonic::Lea
+                && is_load_from_jmp_table(&analyzer, instruction)
+            {
+                Analyzer::debug(
+                    self.target_icall.ip(),
+                    format!("found load from jmp table at 0x{:x}", instruction.ip()),
+                );
+                local_trusted.insert(instruction.op0_register());
+            }
+
             // this is flawed, as paths leading to the same node but with different states are
             // discarded. dont know how to solve
             self.graph.neighbors(current_node).for_each(|nb| {
@@ -209,4 +257,35 @@ impl Cfg {
         }
         Ok(())
     }
+}
+
+// Handle edge case where LEA reg [read-only] -> call reg
+// Not really an indirect call
+fn is_load_from_jmp_table(analyzer: &Analyzer, lea_instruction: Instruction) -> bool {
+    let lea_target = lea_instruction.memory_displacement64();
+    // this indirectly checks that the load is from within .text segment
+    // i.e. read-only memory
+    let Ok(target_instruction) = analyzer.get_instruction(lea_target) else {
+        return false;
+    };
+
+    if target_instruction.flow_control() != FlowControl::UnconditionalBranch {
+        return false;
+    }
+
+    let Ok(instruction_index) = analyzer.get_instruction_index(target_instruction.ip()) else {
+        return false;
+    };
+
+    // if previous instruction is an interrupt
+    let Ok(prev_instruction) = analyzer.get_instruction_from_index(instruction_index - 1) else {
+        return false;
+    };
+    // and the next instruction is an interrup
+    let Ok(next_instruction) = analyzer.get_instruction_from_index(instruction_index + 1) else {
+        return false;
+    };
+    // this is very likely the jump table
+    return prev_instruction.flow_control() == FlowControl::Interrupt
+        && next_instruction.flow_control() == FlowControl::Interrupt;
 }
